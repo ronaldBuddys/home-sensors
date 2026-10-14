@@ -2,7 +2,7 @@
 
 ## Needs you (manual and one-time)
 
-1. **Pair the sensor** so history backfill works after downtime. It needs the PIN on the Aranet display; see [DEPLOYMENT.md §3](DEPLOYMENT.md#3-pair-the-sensor-one-time-needed-for-history-backfill). Then verify with `uv run aranet backfill <MAC> --last 10`.
+1. **Pair the sensor** so history backfill works after downtime. It needs the PIN on the Aranet display; see [DEPLOYMENT.md §3](DEPLOYMENT.md#3-pair-the-sensor-one-time-needed-for-history-backfill). Then verify with `uv run aranet backfill <MAC> --last 10`. Run `aranet backfill <MAC> --all` **once**, with the collector stopped, to import the ~33 h the sensor recorded before logging started; automatic gap detection only looks forward.
 2. **Install as services** with `./deploy/install-user-services.sh`, and optionally run `loginctl enable-linger $USER`. At the moment the collector and web app run from `scripts/devctl.sh`, so they won't survive a reboot or logout.
 3. **Point at the network Postgres** when ready: `uv sync --extra postgres`, set `ARANET_DB_URL` in `.env`, then `aranet copy-db --source sqlite:///data/aranet.sqlite --target <pg-url>`.
 4. **Before publishing**, work through [SECURITY.md](SECURITY.md): add a LICENSE, run a secret scan, and check the author email.
