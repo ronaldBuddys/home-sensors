@@ -56,6 +56,32 @@ def test_copy_db_keeps_rows_after_interval_change(tmp_path):
     init_db(eng)
     st = Store(eng)
     dev = st.upsert_device(DeviceInfo("AA:BB:CC:00:11:22", "Aranet4 12345", interval_s=60))
-    st.bulk_insert_raw(dev, [Reading("AA:BB:CC:00:11:22", t * 60, "adv", co2=500) for t in range(1440)])
+    st.bulk_insert_raw(
+        dev, [Reading("AA:BB:CC:00:11:22", t * 60, "adv", co2=500) for t in range(1440)]
+    )
     st.upsert_device(DeviceInfo("AA:BB:CC:00:11:22", interval_s=600))  # interval changed later
     assert copy_db(a, b)["readings"] == 1440
+
+
+def test_copy_db_target_defaults_to_configured_db(tmp_path, monkeypatch, capsys):
+    a, b = f"sqlite:///{tmp_path}/a.sqlite", f"sqlite:///{tmp_path}/b.sqlite"
+    assert cli.main(["seed", "--db", a, "--days", "0.1"]) == 0
+    monkeypatch.setenv("ARANET_DB_URL", b)
+    capsys.readouterr()
+    assert cli.main(["copy-db", "--source", a]) == 0
+    assert "new reading(s)" in capsys.readouterr().out
+    assert cli.main(["copy-db"]) == 2
+    assert cli.main(["copy-db", "--source", b]) == 2  # same as configured target
+
+
+def test_postgres_url_escapes_password(monkeypatch):
+    from aranet_monitor.config import Settings
+
+    monkeypatch.delenv("ARANET_DB_URL", raising=False)
+    monkeypatch.setenv("POSTGRES_HOST", "db")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "p@ss:w/rd#1")
+    monkeypatch.setenv("POSTGRES_DB", "sensors_db")
+    from sqlalchemy.engine import make_url
+
+    u = make_url(Settings.from_env().db_url)
+    assert u.password == "p@ss:w/rd#1" and u.host == "db" and u.database == "sensors_db"

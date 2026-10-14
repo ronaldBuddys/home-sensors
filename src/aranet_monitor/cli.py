@@ -30,7 +30,7 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def _store(settings: Settings, db_url: str | None = None) -> Store:
-    engine = make_engine(db_url or settings.db_url)
+    engine = make_engine(db_url or settings.db_url, schema=None if db_url else settings.db_schema)
     init_db(engine)
     return Store(engine)
 
@@ -126,7 +126,13 @@ def cmd_serve(args, settings: Settings) -> int:
 
     host = args.host or settings.web_host
     port = args.port or settings.web_port
-    log.info("dashboard on http://%s:%s/  (db %s)", host, port, _safe_url(settings.db_url))
+    log.info(
+        "dashboard on http://%s:%s/  (db %s%s)",
+        host,
+        port,
+        _safe_url(settings.db_url),
+        f", schema {settings.db_schema}" if settings.db_schema else "",
+    )
     uvicorn.run(create_app(settings), host=host, port=port, log_level="warning")
     return 0
 
@@ -200,18 +206,33 @@ def cmd_status(args, settings: Settings) -> int:
 
 
 def cmd_copy_db(args, settings: Settings) -> int:
-    """Copy all data from one database to another (idempotent)."""
+    """Copy all data from one database to another (idempotent).
+
+    Either side defaults to the configured database (``ARANET_DB_URL`` / ``POSTGRES_*`` and
+    ``ARANET_DB_SCHEMA``), so ``aranet copy-db --source sqlite:///data/aranet.sqlite`` moves
+    the local proof-of-concept data into the configured Postgres.
+    """
     from aranet_monitor.db.store import copy_db
 
+    if not args.source and not args.target:
+        print(
+            "give --source and/or --target (the other defaults to the configured DB)",
+            file=sys.stderr,
+        )
+        return 2
     source = args.source or settings.db_url
-    if source == args.target:
+    target = args.target or settings.db_url
+    source_schema = None if args.source else settings.db_schema
+    target_schema = args.target_schema if args.target else settings.db_schema
+    if (source, source_schema) == (target, target_schema):
         print("source and target are the same", file=sys.stderr)
         return 2
     t0 = time.monotonic()
-    counts = copy_db(source, args.target)
+    counts = copy_db(source, target, source_schema=source_schema, target_schema=target_schema)
+    where = _safe_url(target) + (f" (schema {target_schema})" if target_schema else "")
     print(
         f"copied {counts['devices']} device(s), {counts['readings']} new reading(s), "
-        f"{counts['events']} event(s) to {_safe_url(args.target)} in {time.monotonic() - t0:.1f}s"
+        f"{counts['events']} event(s) to {where} in {time.monotonic() - t0:.1f}s"
     )
     return 0
 
@@ -290,8 +311,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_status)
 
     s = sub.add_parser("copy-db", help="copy data between databases (e.g. SQLite -> Postgres)")
-    s.add_argument("--source", help="DB URL to read (default: ARANET_DB_URL)")
-    s.add_argument("--target", required=True, help="DB URL to write")
+    s.add_argument("--source", help="DB URL to read (default: the configured DB)")
+    s.add_argument("--target", help="DB URL to write (default: the configured DB)")
+    s.add_argument("--target-schema", help="Postgres schema when --target is given")
     s.set_defaults(func=cmd_copy_db)
 
     s = sub.add_parser("rollup", help="rebuild the hourly rollup table")

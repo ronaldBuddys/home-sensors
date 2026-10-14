@@ -107,3 +107,19 @@ This is a dated, step-by-step record of what was done, what broke and how it was
 - **Settings.** `ARANET_GAP_BACKFILL_MIN_S` now defaults to 150 s, and is always at least 1.5 × the interval. Backfills are spaced at least 15 min apart.
 - **Collector restarted** on the new code; recording continued with no spurious backfill.
 - **Test totals:** 52 unit/integration and 8 browser tests.
+
+## 2026-10-14 — Network Postgres preparation
+
+- **Two problems with the target database.** A read-only check of the configured DB found:
+  - a typo in the database name (since fixed by the user)
+  - Postgres 17 doesn't let the app role `CREATE` in `public` (the PG15+ default), and the role can't create schemas either
+
+  The database was empty, so there were no table-name clashes.
+- **`ARANET_DB_SCHEMA`.** Added via SQLAlchemy's `schema_translate_map`, so every table goes to `<schema>.<table>`.
+- **Escaped URLs.** `POSTGRES_*` URLs are now built with `URL.create`, which escapes passwords containing `@ : / #`.
+- **Simpler `copy-db`.** `--target` now defaults to the configured DB and schema.
+- **Local verification.** A local `postgres:17` reproduced the production permissions: a role with no CREATE on `public` and owning an `aranet` schema. On it:
+  - the store, query, rollup and collector tests pass (27)
+  - `db-init` and `copy-db` of the real SQLite data work
+  - a second `copy-db` run copies 0 rows
+- **Remaining step for the user:** create the schema on the server as an admin (DEPLOYMENT §5).

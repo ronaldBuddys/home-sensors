@@ -66,7 +66,7 @@ def create_app(settings: Settings | None = None, *, with_dash: bool = True) -> F
         Mount the Dash UI at ``/`` (disable for API-only tests).
     """
     settings = settings or Settings.from_env()
-    engine = make_engine(settings.db_url)
+    engine = make_engine(settings.db_url, schema=settings.db_schema)
     init_db(engine)
     queries = Queries(engine)
 

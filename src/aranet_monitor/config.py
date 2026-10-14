@@ -28,12 +28,17 @@ def _postgres_url_from_parts() -> str | None:
     host = os.environ.get("POSTGRES_HOST")
     if not host:
         return None
-    user = os.environ.get("POSTGRES_USER", "aranet")
-    password = os.environ.get("POSTGRES_PASSWORD", "")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    db = os.environ.get("POSTGRES_DB", "aranet")
-    auth = f"{user}:{password}" if password else user
-    return f"postgresql+psycopg://{auth}@{host}:{port}/{db}"
+    from sqlalchemy.engine import URL
+
+    url = URL.create(
+        "postgresql+psycopg",
+        username=os.environ.get("POSTGRES_USER", "aranet"),
+        password=os.environ.get("POSTGRES_PASSWORD") or None,  # URL.create escapes specials
+        host=host,
+        port=int(os.environ.get("POSTGRES_PORT", "5432")),
+        database=os.environ.get("POSTGRES_DB", "aranet"),
+    )
+    return url.render_as_string(hide_password=False)
 
 
 @dataclass(frozen=True)
@@ -51,6 +56,7 @@ class Settings:
     """
 
     db_url: str = DEFAULT_DB_URL
+    db_schema: str | None = None  # Postgres schema for all tables (default: search_path/public)
     devices: tuple[str, ...] = field(default_factory=tuple)
     web_host: str = "127.0.0.1"
     web_port: int = 8050
@@ -73,6 +79,7 @@ class Settings:
         db_url = env.get("ARANET_DB_URL") or _postgres_url_from_parts() or DEFAULT_DB_URL
         return cls(
             db_url=db_url,
+            db_schema=env.get("ARANET_DB_SCHEMA") or None,
             devices=_split(env.get("ARANET_DEVICES")),
             web_host=env.get("ARANET_WEB_HOST", cls.web_host),
             web_port=int(env.get("ARANET_WEB_PORT", cls.web_port)),

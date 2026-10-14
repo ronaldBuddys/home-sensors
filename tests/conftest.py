@@ -12,6 +12,7 @@ ADDR = "AA:BB:CC:DD:EE:01"
 
 
 PG_URL = os.environ.get("ARANET_TEST_PG_URL")  # e.g. postgresql+psycopg://u:p@localhost:55432/t
+PG_SCHEMA = os.environ.get("ARANET_TEST_PG_SCHEMA")  # optional, must exist and be writable
 
 
 @pytest.fixture
@@ -20,7 +21,7 @@ def engine(tmp_path):
     if PG_URL:
         from aranet_monitor.db.schema import metadata
 
-        eng = make_engine(PG_URL)
+        eng = make_engine(PG_URL, schema=PG_SCHEMA)
         metadata.drop_all(eng)
         init_db(eng)
         yield eng

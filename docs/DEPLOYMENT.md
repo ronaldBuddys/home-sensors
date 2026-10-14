@@ -77,37 +77,55 @@ For development without systemd, use `./scripts/devctl.sh start|stop|status [col
 
 ## 5. Postgres
 
-### Create the database
+### One-time admin step
 
-Run this on your Postgres server:
+Run this as a Postgres admin (e.g. `postgres`) in the target database. On Postgres 15+, ordinary roles can't create tables in `public` by default, so give the app its own schema:
 
 ```sql
-CREATE ROLE aranet LOGIN PASSWORD 'change-me';
-CREATE DATABASE aranet OWNER aranet;
+-- psql -h <host> -p <port> -U postgres -d sensors_db
+CREATE SCHEMA IF NOT EXISTS aranet AUTHORIZATION app_role;
 ```
 
-### Point the app at it
+This puts the app's tables in `aranet`, apart from anything else stored in the database: `aranet.devices`, `aranet.readings`, `aranet.readings_hourly` and `aranet.collector_events`.
+
+If you'd rather use `public`, the alternative is `GRANT CREATE ON SCHEMA public TO app_role;`; in that case leave `ARANET_DB_SCHEMA` unset.
+
+### Configure
+
+In `.env` (git-ignored):
+
+```bash
+POSTGRES_HOST=…  POSTGRES_PORT=…  POSTGRES_DB=sensors_db  POSTGRES_USER=app_role
+POSTGRES_PASSWORD=…              # special characters are fine (escaped automatically)
+ARANET_DB_SCHEMA=aranet
+```
+
+Use `ARANET_DB_URL=postgresql+psycopg://…` instead of the `POSTGRES_*` parts if you prefer a single URL; it takes precedence.
+
+### Create the tables and move the SQLite data
 
 ```bash
 uv sync --frozen --no-dev --extra postgres
-# in .env (never commit it):
-ARANET_DB_URL=postgresql+psycopg://aranet:change-me@db-host:5432/aranet
-uv run aranet db-init
+uv run aranet db-init                                        # creates the 4 tables (idempotent)
+uv run aranet copy-db --source sqlite:///data/aranet.sqlite  # target = the configured DB
 ```
 
-### Move existing SQLite data
+`copy-db` is idempotent: rows that already exist are skipped, and the hourly rollup is refreshed for the copied range.
+
+Then restart the collector and web app; both read `.env` at start-up:
 
 ```bash
-uv run aranet copy-db --source sqlite:///data/aranet.sqlite \
-                      --target postgresql+psycopg://aranet:change-me@db-host:5432/aranet
+./scripts/devctl.sh restart collector && ./scripts/devctl.sh restart web
+# or, once installed as services:
+systemctl --user restart aranet-collector aranet-web
 ```
 
-`copy-db` is idempotent: rows that already exist are skipped. It rebuilds the hourly rollup at the end.
+To catch readings logged between the copy and the restart, run `copy-db` once more afterwards. Readings already copied are skipped, so this is safe.
 
 ### Notes
 
-- The schema is created automatically (`metadata.create_all`). There's no migration tool yet. If the schema changes later, add Alembic.
-- A year of 60 s data for one sensor is about 63 MB in `readings` plus 2.5 MB of rollup on Postgres, and about 27 MB on SQLite.
+- **Migrations:** there is no migration tool yet; the schema is created with `create_all`. Add Alembic when the schema needs to change.
+- **Size:** a year of 60 s data for one sensor is about 63 MB in `readings` plus 2.5 MB of rollup.
 
 ## 6. Raspberry Pi (collector next to the sensor)
 

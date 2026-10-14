@@ -18,8 +18,12 @@ from aranet_monitor.models import METRICS, DeviceInfo, Reading
 DEFAULT_INTERVAL_S = 60
 
 
-def make_engine(db_url: str, *, echo: bool = False) -> Engine:
-    """Create an engine; SQLite gets WAL + busy timeout so collector and web can share it."""
+def make_engine(db_url: str, *, echo: bool = False, schema: str | None = None) -> Engine:
+    """Create an engine; SQLite gets WAL + busy timeout so collector and web can share it.
+
+    ``schema`` (Postgres only) places every table in that schema instead of the default one.
+    The schema must already exist and be writable by the connecting role.
+    """
     if db_url.startswith("sqlite"):
         ensure_sqlite_dir(db_url)
         engine = create_engine(db_url, echo=echo, connect_args={"timeout": 30})
@@ -36,7 +40,11 @@ def make_engine(db_url: str, *, echo: bool = False) -> Engine:
             cur.close()
 
         return engine
-    return create_engine(db_url, echo=echo, pool_pre_ping=True)
+    engine = create_engine(db_url, echo=echo, pool_pre_ping=True)
+    if schema:
+        # Every unqualified table (all of ours) is rendered as "<schema>.<table>".
+        engine = engine.execution_options(schema_translate_map={None: schema})
+    return engine
 
 
 def init_db(engine: Engine) -> None:
@@ -220,7 +228,13 @@ def _count_rows(engine: Engine, device_id: int) -> int:
         ).scalar()
 
 
-def copy_db(source_url: str, target_url: str, chunk: int = 10_000) -> dict[str, int]:
+def copy_db(
+    source_url: str,
+    target_url: str,
+    chunk: int = 10_000,
+    source_schema: str | None = None,
+    target_schema: str | None = None,
+) -> dict[str, int]:
     """Copy devices, readings and events between databases (e.g. SQLite -> Postgres).
 
     Idempotent: readings are inserted with ON CONFLICT DO NOTHING on ``(device_id, ts)``,
@@ -229,7 +243,8 @@ def copy_db(source_url: str, target_url: str, chunk: int = 10_000) -> dict[str, 
     """
     from aranet_monitor.db.queries import Queries
 
-    src, dst = make_engine(source_url), make_engine(target_url)
+    src = make_engine(source_url, schema=source_schema)
+    dst = make_engine(target_url, schema=target_schema)
     init_db(src)
     init_db(dst)
     q, out = Queries(src), Store(dst)
