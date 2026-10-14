@@ -55,9 +55,11 @@ uv run aranet backfill AA:BB:CC:DD:EE:FF --last 10
 
 ```bash
 ./scripts/devctl.sh stop collector          # or: systemctl --user stop aranet-collector
-uv run aranet backfill AA:BB:CC:DD:EE:FF --all
+uv run aranet backfill AA:BB:CC:DD:EE:FF --all    # ~5040 records, 1-3 min; resumable
 ./scripts/devctl.sh start collector         # or: systemctl --user start aranet-collector
 ```
+
+If a download fails partway (weak signal), just run `aranet backfill AA:BB:CC:DD:EE:FF`, without `--all`. It resumes from the first gap in the stored data, and rows already stored are never duplicated. A USB extension cable that brings the dongle closer to the sensor makes downloads much more reliable.
 
 The bond is stored by BlueZ on that host. You need to pair again if you move the collector to a different host (for example, a Pi), or if you "forget" the device.
 

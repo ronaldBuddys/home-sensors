@@ -62,7 +62,7 @@ def test_collector_stores_one_row_per_measurement(store, engine):
     FakeScanner.instances.clear()
     calls = []
 
-    async def fake_history(target, since, timeout):
+    async def fake_history(target, since, timeout, **kw):
         calls.append(since)
         return HistoryResult(DeviceInfo(ADDR, "Aranet4 12345", interval_s=60), [], 2016, 0)
 
@@ -87,7 +87,7 @@ def test_backfill_inserts_history_and_dedupes(store, engine):
     FakeScanner.instances.clear()
     now = int(time.time())
 
-    async def fake_history(target, since, timeout):
+    async def fake_history(target, since, timeout, **kw):
         # 10 older records + one that duplicates the advert-derived latest point (+1 s skew).
         pts = [Reading(ADDR, now - 5 - 60 * k + 1, "history", co2=700 + k) for k in range(11)]
         return HistoryResult(DeviceInfo(ADDR, "Aranet4 12345", interval_s=60), pts, 2016, 1)
@@ -104,7 +104,7 @@ def test_backfill_inserts_history_and_dedupes(store, engine):
 def test_failed_backfill_is_logged_and_cools_down(store, engine):
     FakeScanner.instances.clear()
 
-    async def failing(target, since, timeout):
+    async def failing(target, since, timeout, **kw):
         raise TimeoutError("not paired")
 
     c = Collector(Settings(), store, FakeScanner, failing)
@@ -127,7 +127,7 @@ def _collector(store, fetcher, **settings):
 def test_failed_backfill_is_retried_after_backoff(store, engine):
     calls = []
 
-    async def flaky(target, since, timeout):
+    async def flaky(target, since, timeout, **kw):
         calls.append(since)
         if len(calls) == 1:
             raise TimeoutError("weak signal")
@@ -157,7 +157,7 @@ def test_failed_backfill_is_retried_after_backoff(store, engine):
 def test_runtime_gap_triggers_backfill_since_last_row(store, engine):
     calls = []
 
-    async def fetch(target, since, timeout):
+    async def fetch(target, since, timeout, **kw):
         calls.append(since)
         return HistoryResult(DeviceInfo(ADDR, "Aranet4 12345", interval_s=60), [], 2016, 0)
 
@@ -194,7 +194,7 @@ def test_constant_counter_does_not_drop_new_measurements(store, engine):
 
 
 def test_shutdown_during_backfill_leaves_no_scanner_running(store, engine):
-    async def slow(target, since, timeout):
+    async def slow(target, since, timeout, **kw):
         await asyncio.sleep(30)
 
     c = _collector(store, slow)

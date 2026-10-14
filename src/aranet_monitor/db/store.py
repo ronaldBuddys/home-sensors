@@ -210,6 +210,29 @@ class Store:
         with self.engine.begin() as conn:
             return rebuild_rollup(conn, device_id)
 
+    def first_gap_start(
+        self, device_id: int, interval_s: int, since: int | None = None
+    ) -> int | None:
+        """Newest stored ts just before the first gap (> 1.5 x interval), or the last ts.
+
+        This is the right ``since`` for a history download that should fill *every* hole the
+        device can still provide. ``since`` limits the search to rows at or after it.
+        """
+        r = readings.c
+        nxt = func.lead(r.ts).over(order_by=r.ts).label("nxt")
+        q = select(r.ts, nxt).where(r.device_id == device_id)
+        if since is not None:
+            q = q.where(r.ts >= since)
+        sub = q.subquery()
+        with self.engine.connect() as conn:
+            gap = conn.execute(
+                select(sub.c.ts)
+                .where(sub.c.nxt - sub.c.ts > int(1.5 * interval_s))
+                .order_by(sub.c.ts)
+                .limit(1)
+            ).scalar()
+        return gap if gap is not None else self.last_ts(device_id)
+
     # ------------------------------------------------------------------ events
     def log_event(self, kind: str, detail: str = "", device_id: int | None = None) -> None:
         """Record a collector lifecycle event (start, backfill, gap, error, ...)."""

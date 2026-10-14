@@ -133,3 +133,21 @@ This is a dated, step-by-step record of what was done, what broke and how it was
   - The 1.9 h of data has a spacing histogram of `{59 s: 17, 60 s: 81, 61 s: 15}`: no gaps and no duplicates. The ±1 s values are the expected `now − ago` jitter.
   - `/api/v1/health` reports ok, and the dashboard renders from Postgres with no console errors.
 - **SQLite kept as a backup.** `data/aranet.sqlite` is left in place but no longer written to.
+
+## 2026-10-14 — Pairing and full history backfill
+
+1. **Pairing.** The user paired the sensor (PIN on its display). `aranet backfill --last 10` worked immediately.
+2. **First full download failed** with `GATT Protocol Error: Unlikely Error`. Probing showed:
+   - old records are readable (small windows at index 1, 100 and 500 all worked)
+   - the failures are random link drops during long transfers at about −84 dBm
+   - the sensor holds **5,040** records (3.5 days) in a **full ring buffer**
+3. **Chunked, resumable download.** I rewrote the history download:
+   - 500-record chunks, verified chunks streamed to the DB
+   - reconnect and retry for every GATT operation
+   - per-chunk ring-shift detection and re-anchoring
+   - a fake ring-buffer device in the tests that encodes record ids into the values, so the tests assert exact timestamp and parameter alignment
+4. **Cleanup.** A pre-fix run had stored chunks before its end-of-download shift check, so some rows could have been 60 s mis-timed. I backed up all `history` rows (`data/backup_history_rows_*.csv`), deleted them and re-downloaded.
+   - The first delete attempt rolled back because of a SQL typo in my ad-hoc script; the second worked.
+   - Comparing against the backup afterwards: all 4,907 comparable rows were identical, so the risk hadn't materialised.
+5. **Result.** 5,043 rows, continuous from Sun 11 Oct 04:03, with 0 duplicates and 0 gaps. The rollup counts match.
+6. **Test isolation bug.** Tests were reading the developer's real `.env`, which points at the network Postgres. An autouse fixture now disables `.env` loading and clears `ARANET_*`/`POSTGRES_*` variables in tests.

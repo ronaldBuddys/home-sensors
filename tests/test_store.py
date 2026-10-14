@@ -52,3 +52,12 @@ def test_last_ts_and_events(store, device_id, queries):
     assert store.last_ts(device_id) == 200
     store.log_event("start", "hello", device_id)
     assert queries.recent_events(1)[0]["kind"] == "start"
+
+
+def test_first_gap_start(store, device_id):
+    assert store.first_gap_start(device_id, 60) is None
+    pts = [make_reading(t) for t in (0, 60, 120, 600, 660, 1200)]
+    store.insert_readings(device_id, pts, 60)
+    assert store.first_gap_start(device_id, 60) == 120
+    assert store.first_gap_start(device_id, 60, since=600) == 660
+    assert store.first_gap_start(device_id, 60, since=1200) == 1200  # no gap -> newest

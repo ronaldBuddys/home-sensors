@@ -102,13 +102,44 @@ def cmd_backfill(args, settings: Settings) -> int:
     store = _store(settings)
     address = args.address.upper()
     device_id = store.device_id(address)
-    since = None if args.all or device_id is None else store.last_ts(device_id)
+    if args.all or device_id is None:
+        since = None
+    else:
+        # Fill every hole the device can still provide (it keeps ~5040 points = 3.5 days at
+        # 60 s): start at the first gap within that horizon, not just after the newest row.
+        interval = store.interval_for(address)
+        horizon = int(time.time()) - 5040 * interval
+        since = store.first_gap_start(device_id, interval, since=horizon)
+        if since is None or since < horizon:
+            since = None
     t0 = time.monotonic()
-    result = asyncio.run(
-        fetch_history(address, since, timeout=settings.ble_timeout_s, max_records=args.last)
-    )
+    stored = {"n": 0, "device_id": device_id}
+
+    def save(info, chunk):  # progress is kept even if a later chunk fails
+        if stored["device_id"] is None:
+            stored["device_id"] = store.upsert_device(info)
+        stored["n"] += store.insert_readings(stored["device_id"], chunk, info.interval_s)
+        print(f"  ...stored {stored['n']} new rows so far", flush=True)
+
+    try:
+        result = asyncio.run(
+            fetch_history(
+                address,
+                since,
+                timeout=settings.ble_timeout_s,
+                max_records=args.last,
+                on_chunk=save,
+            )
+        )
+    except Exception as exc:
+        msg = f"backfill failed after storing {stored['n']} new rows: {exc!r}"
+        if stored["device_id"] is not None:
+            store.log_event("backfill_error", msg + " (cli)", stored["device_id"])
+        print(msg, file=sys.stderr)
+        print("Re-run the same command to continue; stored rows are skipped.", file=sys.stderr)
+        return 1
     device_id = store.upsert_device(result.device)
-    n = store.insert_readings(device_id, result.readings, result.device.interval_s)
+    n = stored["n"]
     msg = (
         f"{n} new rows of {len(result.readings)} fetched; device holds "
         f"{result.total_on_device} records; {time.monotonic() - t0:.1f}s"
@@ -279,7 +310,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("backfill", help="download on-device history into the DB")
     s.add_argument("address")
-    s.add_argument("--all", action="store_true", help="ignore stored data; fetch everything")
+    s.add_argument(
+        "--all",
+        action="store_true",
+        help="fetch everything on the device (default: from the first gap in stored data)",
+    )
     s.add_argument("--last", type=int, default=None, help="only the newest N records")
     s.set_defaults(func=cmd_backfill)
 

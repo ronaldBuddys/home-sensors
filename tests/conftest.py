@@ -11,6 +11,17 @@ REAL_ADVERT = bytes.fromhex("210c000200120f013f03bb011828361c013c000e0044")
 ADDR = "AA:BB:CC:DD:EE:01"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_from_local_env(monkeypatch):
+    """Never let the developer's .env / shell config (real Postgres!) leak into tests."""
+    import aranet_monitor.config as config
+
+    monkeypatch.setattr(config, "_load_dotenv", lambda: None)
+    for key in list(os.environ):
+        if key.startswith(("ARANET_", "POSTGRES_")) and not key.startswith("ARANET_TEST_"):
+            monkeypatch.delenv(key, raising=False)
+
+
 PG_URL = os.environ.get("ARANET_TEST_PG_URL")  # e.g. postgresql+psycopg://u:p@localhost:55432/t
 PG_SCHEMA = os.environ.get("ARANET_TEST_PG_SCHEMA")  # optional, must exist and be writable
 

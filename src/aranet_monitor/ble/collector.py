@@ -230,13 +230,26 @@ class Collector:
                 log.info("backfill %s since %s", address, since)
                 t0 = time.monotonic()
                 try:
+
+                    async def save(_info, chunk) -> None:
+                        # Store as we go; on a later failure the retry resumes from here.
+                        nonlocal n
+                        n += await asyncio.to_thread(
+                            self.store.insert_readings, state.device_id, chunk, state.interval_s
+                        )
+                        state.backfill_since = max(state.backfill_since or 0, chunk[-1].ts)
+
                     result = await self._fetch_history(
-                        state.ble_device or address, since, timeout=self.settings.ble_timeout_s
+                        state.ble_device or address,
+                        since,
+                        timeout=self.settings.ble_timeout_s,
+                        on_chunk=save,
                     )
                     await asyncio.to_thread(
                         self.store.upsert_device, result.device, int(time.time()), None
                     )
-                    n = await asyncio.to_thread(
+                    # Idempotent safety net (also covers fetchers that don't stream chunks).
+                    n += await asyncio.to_thread(
                         self.store.insert_readings,
                         state.device_id,
                         result.readings,

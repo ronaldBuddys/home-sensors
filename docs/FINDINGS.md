@@ -39,6 +39,18 @@ These are useful facts I discovered while building this project, kept for future
 
 ## GATT / history download
 
+- **On-device history is a full ring buffer of 5,040 records.** At 60 s that's 3.5 days, not the 2,016 points (~33 h) that older docs and library comments suggest. Once full, `total` stays at 5,040, and every new measurement evicts the oldest record and **shifts every index down by one**.
+  - A full download takes 40–140 s here, so a shift almost always happens mid-download.
+  - `ble/history.py` keeps a rolling `(seconds-since-last-log, wall time)` anchor and checks it after every chunk. On a shift it re-anchors the timestamps and re-reads that chunk one index lower.
+  - A *growing* (not yet full) log only appends, so indices stay stable and nothing needs re-reading.
+- **The link is flaky at about −84 dBm.** Long GATT transfers regularly fail with `BleakGATTProtocolError: Unlikely Error`. Reconnects sometimes fail with `failed to discover services, device disconnected`. Even the first connect and the metadata reads can fail.
+  - Every GATT operation now goes through one helper that reconnects and retries, up to 8 times with growing pauses.
+  - Downloads run in 500-record chunks, oldest first. Verified chunks are stored immediately, so a failure keeps its progress.
+- **Real-device numbers.** A full 5,040-record download took 135 s with 9 recovered link drops and 2 ring shifts. The gap-only re-run took 36 s with 1 drop.
+- **`aranet backfill ADDR` default.** It now starts at the *first gap* in stored data within the device's horizon (`Store.first_gap_start`), so a re-run only fetches what's missing. `--all` re-reads everything.
+- **Pairing.** It worked with `bluetoothctl` (`agent KeyboardOnly`, then `pair` and `trust`). `--last 10` succeeded straight after pairing.
+
+
 - **Pairing is required.** Connecting without pairing fails during service discovery (`failed to discover services, device disconnected` or `GATT Protocol Error: Unlikely Error`). `bluetoothd` logs `new_auth() No agent available for request type 2`, which means the sensor requests **passkey authentication**. This is a one-time pairing step where you enter the PIN shown on the Aranet's display; see `docs/DEPLOYMENT.md`.
 - **`get_all_records()` bug in aranet4 2.6.0.** It returns an **empty** history for Aranet4. Its model check only handles names starting with `Aranet2`, `Aranet☢` and `AranetRn`; everything else, including `Aranet4…`, is treated as "unknown model" and returns early. `ble/history.py` therefore drives `Aranet4.get_records()` directly.
 - **No timeouts in the library.** Its history loops (`_get_records_v1` while-loop on notifications, `_get_records_v2` polling loop) have none. Every GATT step here is wrapped in `asyncio.wait_for`.
