@@ -157,6 +157,13 @@ def cmd_serve(args, settings: Settings) -> int:
 
     host = args.host or settings.web_host
     port = args.port or settings.web_port
+    if not settings.web_password and not _is_loopback(host) and not args.allow_no_auth:
+        print(
+            f"refusing to serve on {host} without ARANET_WEB_PASSWORD "
+            "(set a password, bind to 127.0.0.1, or pass --allow-no-auth)",
+            file=sys.stderr,
+        )
+        return 2
     log.info(
         "dashboard on http://%s:%s/  (db %s%s)",
         host,
@@ -284,6 +291,18 @@ def cmd_db_init(args, settings: Settings) -> int:
     return 0
 
 
+def _is_loopback(host: str) -> bool:
+    """True for ``localhost`` and loopback IP addresses."""
+    import ipaddress
+
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _safe_url(url: str) -> str:
     """Hide the password part of a DB URL for logging."""
     from sqlalchemy.engine import make_url
@@ -321,6 +340,11 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("serve", help="run the API + dashboard")
     s.add_argument("--host")
     s.add_argument("--port", type=int)
+    s.add_argument(
+        "--allow-no-auth",
+        action="store_true",
+        help="allow a non-loopback bind without ARANET_WEB_PASSWORD",
+    )
     s.set_defaults(func=cmd_serve)
 
     s = sub.add_parser("simulate", help="write live synthetic readings")

@@ -85,3 +85,40 @@ def test_postgres_url_escapes_password(monkeypatch):
 
     u = make_url(Settings.from_env().db_url)
     assert u.password == "p@ss:w/rd#1" and u.host == "db" and u.database == "sensors"
+
+
+def test_settings_repr_hides_db_password(monkeypatch):
+    from aranet_monitor.config import Settings
+
+    monkeypatch.setenv("POSTGRES_HOST", "db")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "hunter2-secret")
+    monkeypatch.setenv("ARANET_WEB_PASSWORD", "web-secret")
+    text = repr(Settings.from_env())
+    assert "hunter2-secret" not in text and "web-secret" not in text
+
+
+def test_postgres_port_must_be_numeric(monkeypatch):
+    import pytest
+
+    from aranet_monitor.config import Settings
+
+    monkeypatch.setenv("POSTGRES_HOST", "db")
+    monkeypatch.setenv("POSTGRES_PORT", "54x")
+    with pytest.raises(ValueError, match="POSTGRES_PORT"):
+        Settings.from_env()
+
+
+def test_env_example_does_not_override_postgres_parts():
+    from pathlib import Path
+
+    example = Path(__file__).resolve().parents[1] / ".env.example"
+    active = [ln for ln in example.read_text().splitlines() if ln.startswith("ARANET_DB_URL=")]
+    assert active == []
+
+
+def test_serve_refuses_lan_bind_without_password(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("ARANET_DB_URL", f"sqlite:///{tmp_path}/x.sqlite")
+    assert cli.main(["serve", "--host", "0.0.0.0"]) == 2
+    assert "refusing" in capsys.readouterr().err
+    assert cli._is_loopback("127.0.0.1") and cli._is_loopback("::1")
+    assert cli._is_loopback("localhost") and not cli._is_loopback("0.0.0.0")

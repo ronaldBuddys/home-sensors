@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_DB_URL = "sqlite:///data/aranet.sqlite"
+
+log = logging.getLogger(__name__)
 
 
 def _load_dotenv() -> None:
@@ -30,12 +33,18 @@ def _postgres_url_from_parts() -> str | None:
         return None
     from sqlalchemy.engine import URL
 
+    port = os.environ.get("POSTGRES_PORT", "5432")
+    if not port.isdigit():
+        raise ValueError(f"POSTGRES_PORT must be a number, got {port!r}")
+    password = os.environ.get("POSTGRES_PASSWORD") or None
+    if password is None:
+        log.warning("POSTGRES_HOST is set but POSTGRES_PASSWORD is empty; connecting without one")
     url = URL.create(
         "postgresql+psycopg",
         username=os.environ.get("POSTGRES_USER", "aranet"),
-        password=os.environ.get("POSTGRES_PASSWORD") or None,  # URL.create escapes specials
+        password=password,  # URL.create escapes specials
         host=host,
-        port=int(os.environ.get("POSTGRES_PORT", "5432")),
+        port=int(port),
         database=os.environ.get("POSTGRES_DB", "aranet"),
     )
     return url.render_as_string(hide_password=False)
@@ -55,7 +64,7 @@ class Settings:
         Empty means "any Aranet device that is heard".
     """
 
-    db_url: str = DEFAULT_DB_URL
+    db_url: str = field(default=DEFAULT_DB_URL, repr=False)  # may contain the DB password
     db_schema: str | None = None  # Postgres schema for all tables (default: search_path/public)
     devices: tuple[str, ...] = field(default_factory=tuple)
     web_host: str = "127.0.0.1"

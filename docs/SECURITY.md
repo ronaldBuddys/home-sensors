@@ -7,7 +7,8 @@ The app runs on a home network. The data, indoor CO₂/temperature/humidity, is 
 ## What the code already does
 
 - **Localhost by default.** The web server binds to `127.0.0.1`, and the docker-compose ports are bound to `127.0.0.1` too.
-- **Optional authentication.** When `ARANET_WEB_PASSWORD` is set, HTTP Basic auth covers every route, including the Dash UI. The comparison is constant-time (`secrets.compare_digest`), and `/healthz` stays open for health checks. The password never appears in the settings `repr()` or in logs: DB URLs are logged with the password masked.
+- **Optional authentication.** When `ARANET_WEB_PASSWORD` is set, HTTP Basic auth covers every route, including the Dash UI. The comparison is constant-time (`secrets.compare_digest`), and `/healthz` stays open for health checks. Neither the web password nor the DB URL (which carries the DB password) appears in the settings `repr()`, and DB URLs are logged with the password masked.
+- **No unauthenticated LAN exposure by accident.** `aranet serve` refuses a non-loopback bind without `ARANET_WEB_PASSWORD` unless `--allow-no-auth` is given.
 - **Read-only API.** There are no write or control endpoints. Device settings (interval, integrations) are never changed by this app.
 - **SQL injection.** Metric names in query strings are validated against a fixed allow-list before they're used as column references. Everything else is bound parameters through SQLAlchemy.
 - **Safe CSV filenames.** CSV export filenames are sanitised to alphanumerics.
