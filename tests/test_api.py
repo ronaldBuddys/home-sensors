@@ -67,7 +67,8 @@ def test_dash_is_mounted(client):
     assert client.get("/").status_code == 200
     layout = client.get("/_dash-layout")
     assert layout.status_code == 200 and "kpis" in layout.text
-    assert client.get("/api/docs").status_code == 200
+    assert "swagger" not in client.get("/api/docs").text.lower()  # off unless ARANET_API_DOCS
+    assert client.get("/api/openapi.json").status_code == 200
     assert client.get("/healthz").json() == {"ok": True}
 
 
@@ -95,3 +96,57 @@ def test_web_app_does_not_create_tables(tmp_path):
     with pytest.raises(RuntimeError, match="db-init"):
         create_app(Settings(db_url=url))
     assert inspect(make_engine(url)).get_table_names() == []
+
+
+def test_window_bounds(client):
+    dev = client.get("/api/v1/devices").json()[0]["id"]
+    base = f"/api/v1/devices/{dev}"
+    assert client.get(f"{base}/readings?start=-5&end=100").status_code == 422
+    assert client.get(f"{base}/readings?start=0&end={2**40}").status_code == 422
+    assert client.get(f"{base}/export.csv?start=0&end={int(time.time())}").status_code == 422
+    assert client.get(f"{base}/stats?range=1y").status_code == 200
+
+
+def test_security_headers(client):
+    r = client.get("/api/v1/devices")
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["x-frame-options"] == "DENY"
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    assert "content-security-policy" in client.get("/").headers
+
+
+def test_api_docs_opt_in(tmp_path):
+    url = f"sqlite:///{tmp_path}/docs.sqlite"
+    init_db(make_engine(url))
+    c = TestClient(create_app(Settings(db_url=url, api_docs=True), with_dash=False))
+    r = c.get("/api/docs")
+    assert r.status_code == 200 and "content-security-policy" not in r.headers
+
+
+def test_basic_auth_scheme_case_and_websocket(tmp_path):
+    import base64
+
+    from starlette.websockets import WebSocketDisconnect
+
+    url = f"sqlite:///{tmp_path}/auth2.sqlite"
+    init_db(make_engine(url))
+    c = TestClient(create_app(Settings(db_url=url, web_password="s3cret"), with_dash=False))
+    good = base64.b64encode(b"aranet:s3cret").decode()
+    assert c.get("/api/v1/devices", headers={"Authorization": f"basic {good}"}).status_code == 200
+    r = c.get("/api/v1/devices")
+    assert r.status_code == 401 and r.headers["x-frame-options"] == "DENY"
+    with pytest.raises(WebSocketDisconnect) as exc, c.websocket_connect("/anything"):
+        pass
+    assert exc.value.code == 1008
+
+
+def test_csv_filename_is_ascii(tmp_path):
+    url = f"sqlite:///{tmp_path}/name.sqlite"
+    eng = make_engine(url)
+    init_db(eng)
+    st = Store(eng)
+    dev = st.upsert_device(DeviceInfo("AA:BB:CC:DD:EE:22", "Küche ☃", "Aranet4", "x", 60))
+    c = TestClient(create_app(Settings(db_url=url), with_dash=False))
+    r = c.get(f"/api/v1/devices/{dev}/export.csv?range=24h")
+    assert r.status_code == 200
+    assert 'filename="K_che__' in r.headers["content-disposition"]

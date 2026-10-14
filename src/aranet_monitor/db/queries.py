@@ -46,6 +46,7 @@ RANGES: dict[str, int] = {
     "90d": 90 * 86400,
     "1y": 365 * 86400,
 }
+MAX_SPAN_S = 2 * 366 * 86400  # longest window one request may scan (CSV export: page by year)
 
 
 def pick_bucket(span_s: int, max_points: int, raw_interval_s: int = 60) -> int:
@@ -106,17 +107,18 @@ class Queries:
     # ------------------------------------------------------------------ devices
     def list_devices(self) -> list[dict]:
         """All known devices with their latest measurement time and row count."""
+        r = readings.c
+
+        def per_device(agg):  # correlated subquery: one index lookup per device, one round trip
+            return select(agg(r.ts)).where(r.device_id == devices.c.id).scalar_subquery()
+
+        stmt = select(
+            devices,
+            per_device(func.max).label("latest_ts"),
+            per_device(func.min).label("earliest_ts"),
+        ).order_by(devices.c.id)
         with self.engine.connect() as conn:
-            rows = conn.execute(select(devices).order_by(devices.c.id)).mappings().all()
-            out = []
-            for d in rows:
-                stats = conn.execute(
-                    select(func.max(readings.c.ts), func.min(readings.c.ts)).where(
-                        readings.c.device_id == d["id"]
-                    )
-                ).first()
-                out.append({**dict(d), "latest_ts": stats[0], "earliest_ts": stats[1]})
-            return out
+            return [dict(row) for row in conn.execute(stmt).mappings()]
 
     def device(self, device_id: int) -> dict | None:
         """One device row."""

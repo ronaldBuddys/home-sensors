@@ -52,7 +52,7 @@ If the collector is down for less than about 3.5 days, the missing readings are 
   - **Charts:** linked small-multiple charts for CO₂, temperature, RH and pressure, with min–max envelopes. Range presets run from 1 h to 1 y, plus a custom date range. Drag-to-zoom reloads finer data.
   - **Summary:** a summary table with time spent above the CO₂ thresholds, and CSV export.
   - **Display:** light/dark theme and a mobile layout.
-- **REST API** with OpenAPI docs at `/api/docs`.
+- **REST API** with an OpenAPI schema at `/api/openapi.json` (Swagger UI at `/api/docs` with `ARANET_API_DOCS=1`).
 - **Simulator** (`aranet simulate` / `aranet seed`) for development without hardware.
 
 ## Quick start (from scratch)

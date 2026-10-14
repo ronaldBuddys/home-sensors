@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from aranet_monitor.config import Settings
-from aranet_monitor.db.queries import RANGES, Queries
+from aranet_monitor.db.queries import MAX_SPAN_S, RANGES, Queries
 from aranet_monitor.models import METRICS, UNITS
 
 router = APIRouter(prefix="/api/v1", tags=["aranet"])
@@ -33,6 +33,8 @@ def get_settings(request: Request) -> Settings:
 
 QueriesDep = Annotated[Queries, Depends(get_queries)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+# Epoch seconds; the upper bound (year 2106) keeps values inside BIGINT and datetime range.
+Epoch = Annotated[int | None, Query(ge=0, le=2**32, description="epoch seconds")]
 
 
 def resolve_window(
@@ -48,7 +50,9 @@ def resolve_window(
         start = end - span
     if start >= end:
         raise HTTPException(422, "start must be before end")
-    return start, end
+    if end - start > MAX_SPAN_S:
+        raise HTTPException(422, f"window longer than {MAX_SPAN_S // 86400} days")
+    return max(start, 0), end
 
 
 def _device_or_404(q: Queries, device_id: int) -> dict:
@@ -145,8 +149,8 @@ def readings(
     device_id: int,
     q: QueriesDep,
     range: Annotated[str | None, Query(description=f"one of {', '.join(RANGES)}")] = None,
-    start: int | None = None,
-    end: int | None = None,
+    start: Epoch = None,
+    end: Epoch = None,
     metrics: Annotated[
         str | None, Query(description="comma separated, e.g. co2,temperature")
     ] = None,
@@ -173,8 +177,8 @@ def stats(
     q: QueriesDep,
     settings: SettingsDep,
     range: str | None = None,
-    start: int | None = None,
-    end: int | None = None,
+    start: Epoch = None,
+    end: Epoch = None,
 ) -> dict:
     """Min/mean/max and time spent above CO₂ thresholds for a window."""
     _device_or_404(q, device_id)
@@ -194,8 +198,8 @@ def export_csv(
     device_id: int,
     q: QueriesDep,
     range: str | None = None,
-    start: int | None = None,
-    end: int | None = None,
+    start: Epoch = None,
+    end: Epoch = None,
 ) -> StreamingResponse:
     """Stream raw readings as CSV."""
     dev = _device_or_404(q, device_id)
@@ -214,10 +218,10 @@ def export_csv(
                 buf.truncate()
         yield buf.getvalue()
 
-    safe = "".join(c if c.isalnum() else "_" for c in (dev.get("name") or f"device{device_id}"))
-    fname = (
-        f"{safe}_{datetime.fromtimestamp(start):%Y%m%d}-{datetime.fromtimestamp(end):%Y%m%d}.csv"
-    )
+    name = dev.get("name") or f"device{device_id}"
+    safe = "".join(c if c.isascii() and c.isalnum() else "_" for c in name)
+    first, last = (datetime.fromtimestamp(ts, tz=UTC) for ts in (start, end))
+    fname = f"{safe}_{first:%Y%m%d}-{last:%Y%m%d}.csv"
     return StreamingResponse(
         gen(),
         media_type="text/csv",

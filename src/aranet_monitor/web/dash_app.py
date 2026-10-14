@@ -12,7 +12,7 @@ import dash
 from dash import ClientsideFunction, Input, Output, State, ctx, dcc, html, no_update
 
 from aranet_monitor.config import Settings
-from aranet_monitor.db.queries import RANGES, Queries
+from aranet_monitor.db.queries import MAX_SPAN_S, RANGES, Queries
 from aranet_monitor.web import figures
 
 ASSETS = Path(__file__).parent / "assets"
@@ -260,7 +260,9 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
                 className="card empty",
             )
         device_id = latest_info["device"]
-        cur = queries.latest(device_id) or {}
+        cur = queries.latest(device_id)
+        if not cur:  # unknown device id in the (client-side) store
+            return html.Div("No readings for this device.", className="card empty")
         ago = queries.value_at(device_id, cur["ts"] - 3600) or {}
         spark = queries.series(device_id, cur["ts"] - 6 * 3600, cur["ts"], max_points=72)
         th = figures.THEMES[theme]
@@ -407,12 +409,18 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
         device_id = latest_info["device"]
         dev = queries.device(device_id) or {}
         if is_live:
+            preset = window["preset"] if window["preset"] in RANGES else DEFAULT_PRESET
             end = int(time.time())
-            start = end - RANGES[window["preset"]]
-            uirev = f"{device_id}-{window['preset']}"
+            start = end - RANGES[preset]
+            uirev = f"{device_id}-{preset}"
             x_range = None
         else:
-            start, end = int(window["start"]), int(window["end"])
+            try:
+                start, end = int(window["start"]), int(window["end"])
+            except (KeyError, TypeError, ValueError):  # malformed client state
+                end = int(time.time())
+                start = end - RANGES[DEFAULT_PRESET]
+            start = max(start, end - MAX_SPAN_S, 0)
             base = window.get("base", {})
             uirev = (
                 f"{device_id}-{base.get('preset', 'custom')}"

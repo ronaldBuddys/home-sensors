@@ -7,7 +7,7 @@
                          SQLite (WAL)  or  Postgres     ◀── one ARANET_DB_URL
                                                 ▲
                   web process (aranet serve; uvicorn)
-                  ├── FastAPI  /api/v1/*   /api/docs   /healthz
+                  ├── FastAPI  /api/v1/*   /api/openapi.json   /healthz
                   └── Dash UI  /  (Flask app mounted via a2wsgi; callbacks call the query layer
                                    in-process, not over HTTP)
 ```

@@ -87,6 +87,7 @@ class Settings:
     display_tz: str | None = None  # IANA name, e.g. "Europe/London"; None = system local
     web_user: str = "aranet"
     web_password: str | None = field(default=None, repr=False)  # set => HTTP Basic auth on
+    api_docs: bool = False  # serve Swagger UI at /api/docs (loads JS from a CDN)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -111,6 +112,7 @@ class Settings:
             display_tz=env.get("ARANET_TZ") or None,
             web_user=env.get("ARANET_WEB_USER", cls.web_user),
             web_password=env.get("ARANET_WEB_PASSWORD") or None,
+            api_docs=env.get("ARANET_API_DOCS", "0").lower() in ("1", "true", "yes"),
         )
 
 

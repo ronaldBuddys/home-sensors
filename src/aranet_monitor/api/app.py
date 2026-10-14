@@ -27,7 +27,7 @@ class BasicAuthMiddleware:
         self._expected = f"{user}:{password}".encode()
 
     def _ok(self, header: bytes | None) -> bool:
-        if not header or not header.startswith(b"Basic "):
+        if not header or header[:6].lower() != b"basic ":
             return False
         try:
             supplied = base64.b64decode(header[6:], validate=True)
@@ -36,12 +36,15 @@ class BasicAuthMiddleware:
         return secrets.compare_digest(supplied, self._expected)
 
     async def __call__(self, scope, receive, send):
-        """Reject unauthenticated HTTP requests with 401."""
-        if scope["type"] != "http" or scope.get("path") == "/healthz":
+        """Reject unauthenticated HTTP (401) and websocket (close 1008) connections."""
+        if scope["type"] == "lifespan" or scope.get("path") == "/healthz":
             return await self.app(scope, receive, send)
         headers = dict(scope.get("headers") or [])
         if self._ok(headers.get(b"authorization")):
             return await self.app(scope, receive, send)
+        if scope["type"] != "http":
+            await send({"type": "websocket.close", "code": 1008})
+            return None
         await send(
             {
                 "type": "http.response.start",
@@ -53,6 +56,43 @@ class BasicAuthMiddleware:
             }
         )
         await send({"type": "http.response.body", "body": b"authentication required"})
+
+
+# Dash needs inline/eval script (renderer bootstrap, Plotly); everything is served locally.
+CSP = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+    "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; "
+    "connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; "
+    "frame-ancestors 'none'"
+)
+SECURITY_HEADERS = [
+    (b"x-content-type-options", b"nosniff"),
+    (b"x-frame-options", b"DENY"),
+    (b"referrer-policy", b"no-referrer"),
+    (b"cross-origin-opener-policy", b"same-origin"),
+]
+
+
+class SecurityHeadersMiddleware:
+    """Add security headers to every HTTP response (CSP except on the optional API docs page)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        """Wrap ``send`` to append the headers to ``http.response.start``."""
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        extra = list(SECURITY_HEADERS)
+        if scope.get("path") != "/api/docs":  # Swagger UI loads its JS/CSS from a CDN
+            extra.append((b"content-security-policy", CSP.encode()))
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                message["headers"] = [*message.get("headers", []), *extra]
+            await send(message)
+
+        return await self.app(scope, receive, send_with_headers)
 
 
 def create_app(settings: Settings | None = None, *, with_dash: bool = True) -> FastAPI:
@@ -73,7 +113,7 @@ def create_app(settings: Settings | None = None, *, with_dash: bool = True) -> F
     app = FastAPI(
         title="Aranet Monitor",
         version=__version__,
-        docs_url="/api/docs",
+        docs_url="/api/docs" if settings.api_docs else None,
         redoc_url=None,
         openapi_url="/api/openapi.json",
     )
@@ -84,6 +124,7 @@ def create_app(settings: Settings | None = None, *, with_dash: bool = True) -> F
         app.add_middleware(
             BasicAuthMiddleware, user=settings.web_user, password=settings.web_password
         )
+    app.add_middleware(SecurityHeadersMiddleware)  # added last = outermost, so 401s get them too
     app.include_router(router)
 
     @app.get("/healthz", include_in_schema=False)
