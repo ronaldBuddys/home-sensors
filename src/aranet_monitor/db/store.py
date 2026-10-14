@@ -213,11 +213,19 @@ class Store:
             )
 
 
+def _count_rows(engine: Engine, device_id: int) -> int:
+    with engine.connect() as conn:
+        return conn.execute(
+            select(func.count()).select_from(readings).where(readings.c.device_id == device_id)
+        ).scalar()
+
+
 def copy_db(source_url: str, target_url: str, chunk: int = 10_000) -> dict[str, int]:
     """Copy devices, readings and events between databases (e.g. SQLite -> Postgres).
 
-    Idempotent: readings go through the window-dedupe insert, events newer than the target's
-    newest event are appended, and the hourly rollup is refreshed as rows arrive.
+    Idempotent: readings are inserted with ON CONFLICT DO NOTHING on ``(device_id, ts)``,
+    events newer than the target's newest event are appended, and the hourly rollup is
+    refreshed for the copied range.
     """
     from aranet_monitor.db.queries import Queries
 
@@ -240,18 +248,15 @@ def copy_db(source_url: str, target_url: str, chunk: int = 10_000) -> dict[str, 
                 )
         id_map[d["id"]] = new_id
         counts["devices"] += 1
-        interval = d["interval_s"] or DEFAULT_INTERVAL_S
-        batch: list[Reading] = []
-        for row in q.iter_rows(d["id"], 0, 2**62, chunk=chunk):
-            ts, source, *vals = row
-            batch.append(
-                Reading(d["address"], int(ts), source, **dict(zip(METRICS, vals, strict=True)))
-            )
-            if len(batch) >= chunk:
-                counts["readings"] += out.insert_readings(new_id, batch, interval)
-                batch = []
-        if batch:
-            counts["readings"] += out.insert_readings(new_id, batch, interval)
+        # Plain insert-or-ignore on the primary key: historical rows must not be window-
+        # deduplicated with the device's *current* interval (it may have changed since).
+        before = _count_rows(dst, new_id)
+        rows = (
+            Reading(d["address"], int(ts), source, **dict(zip(METRICS, vals, strict=True)))
+            for ts, source, *vals in q.iter_rows(d["id"], 0, 2**62, chunk=chunk)
+        )
+        out.bulk_insert_raw(new_id, rows, chunk=chunk)
+        counts["readings"] += _count_rows(dst, new_id) - before
 
     with dst.connect() as conn:
         newest = conn.execute(select(func.max(events.c.ts))).scalar() or -1

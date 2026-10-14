@@ -55,14 +55,15 @@ For each metric, this table stores `sum`, `cnt`, `min` and `max` per device-hour
 ## Collector logic
 
 1. **Callback.** The `BleakScanner` detection callback filters on manufacturer id `0x0702` and the optional allow-list, then enqueues the raw bytes. It never touches the DB, so the BLE event loop stays responsive.
-2. **New-measurement test.** The consumer parses each advert. A reading counts as new when the counter byte has changed and `ts > last_ts + interval/2`. Otherwise it is a re-advert of the same measurement, about 5–6 per minute, and is dropped.
+2. **New-measurement test.** The consumer parses each advert. A reading is new when its measurement time is more than interval/2 after the newest stored row. Re-adverts of the same measurement (about 5–6 per minute, ±1 s jitter) fail that test and are dropped. The counter byte is decoded but **not** relied on: a firmware that didn't increment it must not cause silent data loss.
 3. **Window dedupe.** `Store.insert_readings` skips any row within ±(interval/2 − 1) s of an existing row. This merges advert-derived and history-derived points, which both carry about ±1 s of host-clock jitter. It then refreshes the touched hourly rollup buckets in the same transaction.
-4. **When to backfill.** A backfill is scheduled when:
-   - the first advert after start-up shows that the newest stored row is older than `ARANET_GAP_BACKFILL_MIN_S` (300 s), or
-   - a device reappears after being silent for that long.
-5. **How backfill runs.** The scanner is stopped, because BlueZ connect-while-scanning is flaky. The history download runs with timeouts, the rows are inserted, and the scanner restarts. After a failure, which usually means the device isn't paired, backfill cools down for 1 h.
-6. **Watchdog.** If no adverts arrive for `ARANET_WATCHDOG_S` (180 s), the scanner is restarted.
-7. **Shutdown.** SIGINT/SIGTERM stops the collector gracefully and writes a `stop` event with counters.
+4. **Gap detection.** A new reading more than `max(ARANET_GAP_BACKFILL_MIN_S (150 s), 1.5 × interval)` after the newest stored row marks a gap. The cause doesn't matter: the collector was down, the scanner paused for a backfill, a radio dropout, or start-up. The gap's start (`backfill_since`) stays **pending until a backfill succeeds**.
+5. **Backfill.**
+   - **Throttling.** At most one GATT session per 15 min per device, to protect the battery. The device keeps about 33 h of history, so deferring loses nothing.
+   - **Procedure.** The scanner is stopped, because BlueZ connect-while-scanning is flaky. `ble/history.py` downloads records after `backfill_since` with per-step timeouts. It re-reads `total`/`ago` afterwards, and retries if the device logged a point mid-download, since that would offset the columns. Rows are inserted and the scanner restarts, except during shutdown.
+   - **Failures** (typically: not paired) back off exponentially: 15 min, 30 min, … up to 6 h. The gap stays pending.
+6. **Watchdog.** If no adverts arrive for `ARANET_WATCHDOG_S` (180 s), the scanner is restarted. Scanner start and stop have 20 s timeouts, so a hung BlueZ call can't wedge the lock.
+7. **Shutdown.** SIGINT/SIGTERM cancels any running backfill, stops the scanner and writes a `stop` event with counters.
 
 ## Read path and performance
 

@@ -372,13 +372,14 @@ class Queries:
         status = []
         for d in devs:
             age = now - d["latest_ts"] if d["latest_ts"] else None
+            limit = max(stale_after_s, int(2.5 * (d["interval_s"] or 60)))
             status.append(
                 {
                     "id": d["id"],
                     "name": d["name"],
                     "latest_ts": d["latest_ts"],
                     "age_s": age,
-                    "ok": age is not None and age <= stale_after_s,
+                    "ok": age is not None and age <= limit,
                 }
             )
         return {

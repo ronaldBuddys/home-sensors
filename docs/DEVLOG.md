@@ -95,3 +95,15 @@ This is a dated, step-by-step record of what was done, what broke and how it was
   - git history scanned: no real MAC or serial
 - **`aranet copy-db`** copies SQLite to Postgres (or any pair), idempotently, for moving the PoC data onto the network Postgres.
 - **Real-device data at this point.** One row every 60 s, with zero missed or duplicated measurements across collector restarts. Spacing histogram: `{60 s: all}`.
+
+## 2026-10-14 — Review fixes
+
+- **Independent review.** A separate agent reviewed the collector, history download, store, queries and Dash logic, and found 8 issues (3 confirmed with scripts). The details are in FINDINGS § Review findings.
+- **Fixes.** Everything except the DST rendering quirk is fixed, with new tests:
+  - `tests/test_history.py`: a fake GATT device, including a log that grows mid-download
+  - more collector tests: runtime gap, retry after a failure, constant counter, shutdown during a backfill
+  - a `copy_db` interval-change test
+  - an e2e double-click test
+- **Settings.** `ARANET_GAP_BACKFILL_MIN_S` now defaults to 150 s, and is always at least 1.5 × the interval. Backfills are spaced at least 15 min apart.
+- **Collector restarted** on the new code; recording continued with no spurious backfill.
+- **Test totals:** 52 unit/integration and 8 browser tests.

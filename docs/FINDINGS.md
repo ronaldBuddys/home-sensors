@@ -29,7 +29,8 @@ These are useful facts I discovered while building this project, kept for future
   | `[19..20]` | seconds since last measurement (`ago`) |
   | `[21]` | rolling **counter** |
 
-- **Counter.** It **increments by exactly 1 per logged measurement**; I observed 77 → 78 → 79 → 80 at 60 s intervals. `aranet4` 2.6.0 does **not** decode it for Aranet4 (its struct stops at byte 20), so `ble/parse.py` reads `raw[21]` itself. It's a clean "is this a new measurement?" key.
+- **Counter.** It **increments by exactly 1 per logged measurement**; I observed 77 → 78 → 79 → 80 at 60 s intervals. `aranet4` 2.6.0 does **not** decode it for Aranet4 (its struct stops at byte 20), so `ble/parse.py` reads `raw[21]` itself.
+  - **Not used for dedupe.** The measurement timestamp alone (re-adverts are within ±1 s) is a sufficient and safer "is this new?" test. Relying on an undocumented byte could silently drop every reading on firmware that doesn't increment it, and it wraps at 256.
 - **Advert cadence.** BlueZ delivered an advert roughly every **3–13 s** (27 in 300 s at RSSI around −84 dBm). The same measurement is re-advertised about 5–6 times with increasing `ago`.
 - **Measurement time.** `now − ago` is stable to within **±1 s** across re-adverts. That jitter is why dedupe uses a ±interval/2 window rather than exact timestamp equality.
 - **Firmware string.** The advert's version bytes decode (via the library) to `v2.0.12`. This still needs confirming against GATT `SW_REV` once the device is paired.
@@ -80,3 +81,20 @@ These are useful facts I discovered while building this project, kept for future
   - Warm reload: **0.25–0.54 s**. The bundle is revalidated by ETag (a 300 B 304 response).
   - Switching presets: about 0.35 s.
 - **Rejected optimisation.** A Plotly *cartesian* partial bundle (about 0.4 MB gzipped) would cut the cold load. However, Dash registers plotly.js through the private `Dash._setup_plotlyjs()`, so swapping it means patching Dash internals. Not worth it, given the warm-cache numbers; revisit if the dashboard is served to slow mobile clients.
+
+## Review findings (independent code review, 2026-10-14)
+
+An independent review agent found these; all are fixed with regression tests unless noted.
+
+- **Mid-download shift.** If the sensor logs a point during a multi-parameter history download, the per-parameter columns shift relative to each other. When the log is full this silently mis-pairs values; when it isn't full the library raises `IndexError`. Fix: re-read `total`/`ago` after the download and retry.
+- **Copying with the current interval.** `copy_db` window-deduplicated old 60 s data using the device's *current* interval (600 s), turning 1440 rows into 288. It now uses insert-or-ignore on the primary key.
+- **Scanner leak on shutdown.** Stopping during a backfill left a scanner running, because the backfill's `finally` restarted it. Shutdown now cancels backfill tasks and never restarts the scanner while stopping.
+- **Gaps that were never healed:**
+  - points missed while the scanner was paused
+  - a failed start-up backfill
+  - a backfill skipped during cooldown
+
+  Gap detection is now based on measurement timestamps, and pending gaps persist across failures (with exponential back-off).
+- **Double-click reset.** Double-clicking an unzoomed 7 d or custom view jumped to 24 h. Now it only undoes a zoom.
+- **Thresholds ignored long intervals.** The stale and gap thresholds ignored the device interval, which mattered at 600 s logging. Both now scale with the interval.
+- **DST fall-back** renders the repeated hour doubled back. This is documented, not fixed; see ROADMAP.

@@ -55,7 +55,7 @@ class Settings:
     web_host: str = "127.0.0.1"
     web_port: int = 8050
     backfill_on_start: bool = True
-    gap_backfill_min_s: int = 300
+    gap_backfill_min_s: int = 150  # also always >= 1.5 x the device's logging interval
     watchdog_s: int = 180
     ble_timeout_s: float = 30.0
     co2_warn: int = 1000

@@ -4,11 +4,15 @@ Normal operation is a *passive* BLE scan: with "Smart Home integrations" enabled
 broadcasts its latest measurement in every advertisement, so we never connect to it. A GATT
 connection (which costs sensor battery) is only made to backfill history:
 
-* once at start-up, if the newest stored row is older than ``gap_backfill_min_s``;
-* when a device re-appears after being silent for longer than ``gap_backfill_min_s``.
+* when the measurement time of a new advert is more than ``max(gap_backfill_min_s,
+  1.5 x interval)`` after the newest stored row (collector was down, scanner was paused,
+  radio dropped out, ...) -- this includes the first advert after start-up;
+* at most once every ``BACKFILL_MIN_SPACING_S``; a failed attempt stays pending and is retried
+  with exponential back-off (the device keeps ~2016 records, so deferring loses nothing).
 
-The Aranet4 advert carries a rolling ``counter`` that increments once per logged measurement
-(verified empirically), which we use as the cheap "is this new?" test before touching the DB.
+A re-advertised measurement is recognised purely by its timestamp (within interval/2 of the
+newest stored row). The advert's rolling counter byte is decoded but deliberately not relied
+upon, so firmware that doesn't increment it cannot cause silent data loss.
 """
 
 from __future__ import annotations
@@ -36,14 +40,16 @@ log = logging.getLogger(__name__)
 class _DeviceState:
     device_id: int
     interval_s: int
-    last_counter: int | None = None
     last_ts: int | None = None  # newest stored measurement time
-    last_heard: float = 0.0  # monotonic time of last advert
     last_meta_write: float = 0.0
     ble_device: BLEDevice | None = None
     integrations_warned: bool = False
+    seen_this_session: bool = False
     backfill_pending: bool = False
-    backfill_blocked_until: float = 0.0  # monotonic; set after a failed backfill
+    backfill_since: int | None = None  # newest stored ts before the oldest unfilled gap
+    backfill_running: bool = False
+    backfill_not_before: float = 0.0  # monotonic; spacing / failure back-off
+    backfill_failures: int = 0
 
 
 @dataclass
@@ -58,7 +64,10 @@ class Collector:
     """Passive scanner + gap backfill. Run with :meth:`run`."""
 
     META_EVERY_S = 600  # refresh devices.last_seen / rssi at most this often
-    BACKFILL_COOLDOWN_S = 3600
+    BACKFILL_MIN_SPACING_S = 900  # battery: at most one GATT session per 15 min per device
+    BACKFILL_RETRY_S = 900  # first retry after a failure; doubles each time ...
+    BACKFILL_RETRY_MAX_S = 6 * 3600  # ... up to this
+    SCANNER_OP_TIMEOUT_S = 20
 
     def __init__(
         self,
@@ -96,15 +105,23 @@ class Collector:
         except asyncio.QueueFull:  # pragma: no cover - consumer stalled
             log.warning("advert queue full; dropping")
 
-    async def _start_scanner(self) -> None:
-        self._scanner = self._scanner_factory(detection_callback=self._on_advert)
-        await self._scanner.start()
+    async def _start_scanner(self) -> bool:
+        """Start a fresh scanner; on failure log it and leave recovery to the watchdog."""
+        scanner = self._scanner_factory(detection_callback=self._on_advert)
+        try:
+            await asyncio.wait_for(scanner.start(), self.SCANNER_OP_TIMEOUT_S)
+        except Exception as exc:
+            log.error("scanner start failed: %r (watchdog will retry)", exc)
+            self._scanner = None
+            return False
+        self._scanner = scanner
         log.info("passive scan started")
+        return True
 
     async def _stop_scanner(self) -> None:
         if self._scanner is not None:
             with contextlib.suppress(Exception):
-                await self._scanner.stop()
+                await asyncio.wait_for(self._scanner.stop(), self.SCANNER_OP_TIMEOUT_S)
             self._scanner = None
 
     # ------------------------------------------------------------------ processing
@@ -131,9 +148,12 @@ class Collector:
                 self.store.upsert_device, parsed.device, int(received), rssi
             )
             last_ts = await asyncio.to_thread(self.store.last_ts, device_id)
+            interval = parsed.device.interval_s or await asyncio.to_thread(
+                self.store.interval_for, address
+            )
             state = _DeviceState(
                 device_id=device_id,
-                interval_s=parsed.device.interval_s or self.store.interval_for(address),
+                interval_s=interval,
                 last_ts=last_ts,
                 last_meta_write=time.monotonic(),
             )
@@ -142,16 +162,6 @@ class Collector:
             await asyncio.to_thread(
                 self.store.log_event, "device_seen", f"{name} {parsed.device.firmware}", device_id
             )
-            if self.settings.backfill_on_start and self._gap_exceeded(state, received):
-                state.backfill_pending = True
-        else:
-            silent_for = time.monotonic() - state.last_heard
-            if silent_for > self.settings.gap_backfill_min_s and self._gap_exceeded(
-                state, received
-            ):
-                log.info("%s silent for %.0fs; scheduling backfill", address, silent_for)
-                state.backfill_pending = True
-        state.last_heard = time.monotonic()
         state.ble_device = device
 
         if parsed.reading is None:
@@ -168,101 +178,119 @@ class Collector:
             state.last_meta_write = time.monotonic()
             await asyncio.to_thread(self.store.upsert_device, parsed.device, int(received), rssi)
 
-        is_new = parsed.counter is None or parsed.counter != state.last_counter
-        if is_new and (
-            state.last_ts is None or parsed.reading.ts > state.last_ts + state.interval_s // 2
-        ):
+        reading = parsed.reading
+        is_new = state.last_ts is None or reading.ts > state.last_ts + state.interval_s // 2
+        if is_new:
+            first = not state.seen_this_session
+            state.seen_this_session = True
+            gap = state.last_ts is None or reading.ts - state.last_ts > self._gap_threshold(state)
+            wanted = gap and (not first or self.settings.backfill_on_start)
+            if wanted and not state.backfill_pending:
+                state.backfill_pending = True
+                state.backfill_since = state.last_ts
+                log.info("%s: gap since %s detected; backfill scheduled", address, state.last_ts)
             n = await asyncio.to_thread(
-                self.store.insert_readings, state.device_id, [parsed.reading], state.interval_s
+                self.store.insert_readings, state.device_id, [reading], state.interval_s
             )
             if n:
                 self.stats.stored += n
-                state.last_ts = parsed.reading.ts
                 log.info(
                     "%s co2=%s T=%s RH=%s P=%s batt=%s rssi=%s",
                     name,
-                    parsed.reading.co2,
-                    parsed.reading.temperature,
-                    parsed.reading.humidity,
-                    parsed.reading.pressure,
-                    parsed.reading.battery,
+                    reading.co2,
+                    reading.temperature,
+                    reading.humidity,
+                    reading.pressure,
+                    reading.battery,
                     rssi,
                 )
-        state.last_counter = parsed.counter
+            state.last_ts = max(state.last_ts or 0, reading.ts)
 
-        if state.backfill_pending:
-            state.backfill_pending = False
-            if time.monotonic() >= state.backfill_blocked_until:
-                self._tasks.add(task := asyncio.create_task(self._backfill(address)))
-                task.add_done_callback(self._tasks.discard)
-            else:
-                log.info("%s: backfill skipped (cooling down after failure)", address)
+        if (
+            state.backfill_pending
+            and not state.backfill_running
+            and not self._stop.is_set()
+            and time.monotonic() >= state.backfill_not_before
+        ):
+            state.backfill_running = True
+            self._tasks.add(task := asyncio.create_task(self._backfill(address)))
+            task.add_done_callback(self._tasks.discard)
 
-    def _gap_exceeded(self, state: _DeviceState, now: float) -> bool:
-        if state.last_ts is None:
-            return True
-        return now - state.last_ts > self.settings.gap_backfill_min_s
+    def _gap_threshold(self, state: _DeviceState) -> int:
+        return max(self.settings.gap_backfill_min_s, int(1.5 * state.interval_s))
 
     # ------------------------------------------------------------------ backfill
     async def _backfill(self, address: str) -> int:
         state = self._devices[address]
-        async with self._ble_lock:
-            await self._stop_scanner()  # BlueZ connect-while-scanning is unreliable
-            # last_ts may have advanced from the advert that triggered us; backfill before it.
-            since = await asyncio.to_thread(self._newest_before_gap, state)
-            log.info("backfill %s since %s", address, since)
-            t0 = time.monotonic()
-            n = 0
-            try:
-                result = await self._fetch_history(
-                    state.ble_device or address, since, timeout=self.settings.ble_timeout_s
-                )
-                await asyncio.to_thread(
-                    self.store.upsert_device, result.device, int(time.time()), None
-                )
-                n = await asyncio.to_thread(
-                    self.store.insert_readings, state.device_id, result.readings, state.interval_s
-                )
-                self.stats.backfilled += n
-                detail = (
-                    f"{n} new of {len(result.readings)} fetched "
-                    f"(device holds {result.total_on_device}) in {time.monotonic() - t0:.1f}s"
-                )
-                log.info("backfill %s: %s", address, detail)
-                await asyncio.to_thread(self.store.log_event, "backfill", detail, state.device_id)
-            except Exception as exc:
-                # Typical causes: device not paired (Aranet4 needs a PIN-paired bond for GATT),
-                # weak signal, or the phone app holding the connection. Back off.
-                state.backfill_blocked_until = time.monotonic() + self.BACKFILL_COOLDOWN_S
-                log.warning(
-                    "backfill %s failed: %r (is the device paired? see docs/DEPLOYMENT.md); "
-                    "retrying no sooner than %ds",
-                    address,
-                    exc,
-                    self.BACKFILL_COOLDOWN_S,
-                )
-                await asyncio.to_thread(
-                    self.store.log_event, "backfill_error", repr(exc), state.device_id
-                )
-            finally:
-                await self._start_scanner()
-                self._last_advert = time.monotonic()
+        since = state.backfill_since
+        n = 0
+        try:
+            async with self._ble_lock:
+                await self._stop_scanner()  # BlueZ connect-while-scanning is unreliable
+                log.info("backfill %s since %s", address, since)
+                t0 = time.monotonic()
+                try:
+                    result = await self._fetch_history(
+                        state.ble_device or address, since, timeout=self.settings.ble_timeout_s
+                    )
+                    await asyncio.to_thread(
+                        self.store.upsert_device, result.device, int(time.time()), None
+                    )
+                    n = await asyncio.to_thread(
+                        self.store.insert_readings,
+                        state.device_id,
+                        result.readings,
+                        state.interval_s,
+                    )
+                    self.stats.backfilled += n
+                    state.backfill_pending = False
+                    state.backfill_since = None
+                    state.backfill_failures = 0
+                    state.backfill_not_before = time.monotonic() + self.BACKFILL_MIN_SPACING_S
+                    if result.readings:
+                        state.last_ts = max(state.last_ts or 0, result.readings[-1].ts)
+                    detail = (
+                        f"{n} new of {len(result.readings)} fetched "
+                        f"(device holds {result.total_on_device}) "
+                        f"in {time.monotonic() - t0:.1f}s"
+                    )
+                    log.info("backfill %s: %s", address, detail)
+                    await asyncio.to_thread(
+                        self.store.log_event, "backfill", detail, state.device_id
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # Typical causes: device not paired (Aranet4 needs a PIN-paired bond for
+                    # GATT), weak signal, or the phone app holding the connection. The gap
+                    # stays pending and is retried with exponential back-off.
+                    state.backfill_failures += 1
+                    wait = min(
+                        self.BACKFILL_RETRY_MAX_S,
+                        self.BACKFILL_RETRY_S * 2 ** (state.backfill_failures - 1),
+                    )
+                    state.backfill_not_before = time.monotonic() + wait
+                    log.warning(
+                        "backfill %s failed (%d in a row): %r (is the device paired? see "
+                        "docs/DEPLOYMENT.md); will retry in %ds",
+                        address,
+                        state.backfill_failures,
+                        exc,
+                        wait,
+                    )
+                    await asyncio.to_thread(
+                        self.store.log_event,
+                        "backfill_error",
+                        f"{exc!r}; retry in {wait}s",
+                        state.device_id,
+                    )
+                finally:
+                    if not self._stop.is_set():
+                        await self._start_scanner()
+                    self._last_advert = time.monotonic()
+        finally:
+            state.backfill_running = False
         return n
-
-    def _newest_before_gap(self, state: _DeviceState) -> int | None:
-        """Newest stored ts strictly older than the reading that just arrived."""
-        from sqlalchemy import select
-
-        from aranet_monitor.db.schema import readings
-
-        bound = (state.last_ts or int(time.time())) - state.interval_s // 2
-        with self.store.engine.connect() as conn:
-            return conn.execute(
-                select(readings.c.ts)
-                .where(readings.c.device_id == state.device_id, readings.c.ts < bound)
-                .order_by(readings.c.ts.desc())
-                .limit(1)
-            ).scalar()
 
     async def backfill_now(self, address: str, since: int | None = None):
         """One-shot backfill (CLI ``aranet backfill``)."""
@@ -283,10 +311,7 @@ class Collector:
                 async with self._ble_lock:
                     await self._stop_scanner()
                     await asyncio.sleep(2)
-                    try:
-                        await self._start_scanner()
-                    except Exception as exc:
-                        log.error("scanner restart failed: %r", exc)
+                    await self._start_scanner()
                 self._last_advert = time.monotonic()
 
     # ------------------------------------------------------------------ lifecycle
@@ -307,9 +332,11 @@ class Collector:
         try:
             await self._stop.wait()
         finally:
-            for t in tasks:
+            self._stop.set()
+            pending = [*tasks, *self._tasks]
+            for t in pending:
                 t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*pending, return_exceptions=True)
             await self._stop_scanner()
             await asyncio.to_thread(
                 self.store.log_event,

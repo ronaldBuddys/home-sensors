@@ -233,7 +233,8 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
         if device_id is None:
             return no_update
         ts = queries.latest_ts(device_id)
-        new = {"device": device_id, "ts": ts}
+        interval = (queries.device(device_id) or {}).get("interval_s") or 60
+        new = {"device": device_id, "ts": ts, "interval": interval}
         return no_update if new == current else new
 
     # Relative "updated 23 s ago" runs in the browser every 5 s: no server round-trip.
@@ -376,6 +377,8 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
         if trig == "chart":
             parsed = _parse_relayout(relayout)
             if parsed == "reset":
+                if not window.get("zoom"):
+                    return no_update, no_update, no_update, no_update  # nothing to undo
                 base = window.get("base") or {"preset": DEFAULT_PRESET}
                 return base, base.get("preset") or no_update, no_update, no_update
             if isinstance(parsed, tuple):

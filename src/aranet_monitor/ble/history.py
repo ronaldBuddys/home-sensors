@@ -21,6 +21,8 @@ from aranet_monitor.models import DeviceInfo, Reading
 
 log = logging.getLogger(__name__)
 
+MAX_ATTEMPTS = 3
+
 
 @dataclass(frozen=True)
 class HistoryResult:
@@ -99,36 +101,52 @@ async def fetch_history(
         name = await step(monitor.get_name())
         firmware = await step(monitor.get_version())
         interval = await step(monitor.get_interval())
-        ago = await step(monitor.get_seconds_since_update())
-        now = int(time.time())
-        if interval - ago < 8:
-            # A new point is about to be logged; wait so indices don't shift mid-download.
-            await asyncio.sleep(interval - ago + 2)
-            ago = await step(monitor.get_seconds_since_update())
-            now = int(time.time())
-        total = await step(monitor.get_total_readings())
-        times = log_times(now, total, interval, ago)
-        start = first_index_after(times, since_ts, tol=interval // 2)
-        if max_records and start and total - start + 1 > max_records:
-            start = total - max_records + 1
         info = DeviceInfo(
             address=address.upper(), name=name, firmware=firmware, interval_s=interval
         )
-        if start == 0:
-            return HistoryResult(info, [], total, 0)
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            ago = await step(monitor.get_seconds_since_update())
+            if interval - ago < 8:
+                # A new point is about to be logged; wait so indices don't shift mid-download.
+                await asyncio.sleep(interval - ago + 2)
+                ago = await step(monitor.get_seconds_since_update())
+            now = int(time.time())
+            total = await step(monitor.get_total_readings())
+            times = log_times(now, total, interval, ago)
+            start = first_index_after(times, since_ts, tol=interval // 2)
+            if max_records and start and total - start + 1 > max_records:
+                start = total - max_records + 1
+            if start == 0:
+                return HistoryResult(info, [], total, 0)
 
-        columns: dict[str, list] = {}
-        for col, param in _params_for(name).items():
-            t0 = time.monotonic()
-            columns[col] = await step(monitor.get_records(param, total, start, total), 4)
-            log.info(
-                "history %s: %s records %d..%d in %.1fs",
-                address,
-                col,
-                start,
-                total,
-                time.monotonic() - t0,
-            )
+            columns: dict[str, list] = {}
+            shifted = False
+            try:
+                for col, param in _params_for(name).items():
+                    t0 = time.monotonic()
+                    columns[col] = await step(monitor.get_records(param, total, start, total), 4)
+                    log.info(
+                        "history %s: %s records %d..%d in %.1fs",
+                        address,
+                        col,
+                        start,
+                        total,
+                        time.monotonic() - t0,
+                    )
+            except IndexError:
+                shifted = True  # log grew during the download (library writes past `total`)
+            # If the device logged a point while we were reading, the per-parameter columns
+            # may be offset from each other and from `times`: verify, else start over.
+            if not shifted:
+                ago2 = await step(monitor.get_seconds_since_update())
+                total2 = await step(monitor.get_total_readings())
+                elapsed = int(time.time()) - now
+                shifted = total2 != total or ago2 < ago + elapsed - 3
+            if not shifted:
+                break
+            log.info("history %s: device logged a point mid-download; retry %d", address, attempt)
+        else:
+            raise RuntimeError("history download kept overlapping a new measurement")
 
         out: list[Reading] = []
         for idx in range(start - 1, total):

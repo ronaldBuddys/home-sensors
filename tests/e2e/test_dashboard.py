@@ -144,3 +144,13 @@ def test_mobile_has_no_horizontal_overflow(browser, server):
     pg.wait_for_selector("#chart .main-svg")
     assert pg.evaluate("document.documentElement.scrollWidth") <= 390
     pg.close()
+
+
+def test_dblclick_on_unzoomed_preset_keeps_it(page):
+    page.click("#preset label:has-text('7d')")
+    page.wait_for_function("document.querySelector('#window-label').innerText.includes('15 min')")
+    box = page.locator("#chart .nsewdrag").first.bounding_box()
+    page.mouse.dblclick(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.wait_for_timeout(800)
+    assert "15 min" in label(page)
+    assert page.locator("#preset label.selected").inner_text() == "7d"

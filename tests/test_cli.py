@@ -45,3 +45,17 @@ def test_copy_db_is_idempotent(tmp_path, capsys):
     sa = qa.stats(1, 0, 2**40)
     sb = qb.stats(1, 0, 2**40)
     assert sa["n"] == sb["n"] and sa["co2_mean"] == sb["co2_mean"]
+
+
+def test_copy_db_keeps_rows_after_interval_change(tmp_path):
+    from aranet_monitor.db.store import Store, copy_db, init_db, make_engine
+    from aranet_monitor.models import DeviceInfo, Reading
+
+    a, b = f"sqlite:///{tmp_path}/a.sqlite", f"sqlite:///{tmp_path}/b.sqlite"
+    eng = make_engine(a)
+    init_db(eng)
+    st = Store(eng)
+    dev = st.upsert_device(DeviceInfo("AA:BB:CC:00:11:22", "Aranet4 12345", interval_s=60))
+    st.bulk_insert_raw(dev, [Reading("AA:BB:CC:00:11:22", t * 60, "adv", co2=500) for t in range(1440)])
+    st.upsert_device(DeviceInfo("AA:BB:CC:00:11:22", interval_s=600))  # interval changed later
+    assert copy_db(a, b)["readings"] == 1440

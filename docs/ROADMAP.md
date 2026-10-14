@@ -26,6 +26,6 @@
 
 ## Known limitations
 
-- **No pairing yet.** Until the sensor is paired, gaps from collector downtime aren't refilled. Passive collection is unaffected.
-- **Long backfills can drop a point.** During a backfill the scanner is paused (about 10–60 s), so one advert-derived point can be missed if the backfill spans a measurement. Rows logged *during* a long download aren't in that download either. The next gap check doesn't catch this, because the gap is shorter than 300 s.
+- **Daylight-saving fall-back.** On the night clocks go back, the repeated hour is drawn doubled back on itself, because the chart's x-axis uses naive local time (Plotly has no tz-aware axis). Storage is UTC and unaffected. A fix would be an option to display UTC.
+- **History needs pairing.** Until the sensor is paired, detected gaps stay pending. A connection attempt is made at a backed-off rate of at most once every 6 h after a few failures.
 - **Rollup stats are hour-aligned.** Stats for windows longer than 7 days come from the hourly rollup, so the window edges are aligned to the hour (accurate to about 1 hour of data at each end).

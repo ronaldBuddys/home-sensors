@@ -109,12 +109,98 @@ def test_failed_backfill_is_logged_and_cools_down(store, engine):
 
     c = Collector(Settings(), store, FakeScanner, failing)
     asyncio.run(drive(c, [lambda s: s.emit(with_counter(1))], settle=0.3))
+    with engine.connect() as conn:
+        assert n_rows(engine) == 1
     assert n_rows(engine) == 1  # passive data still recorded
     with engine.connect() as conn:
         kinds = conn.execute(select(events.c.kind)).scalars().all()
     assert "backfill_error" in kinds
     st = next(iter(c._devices.values()))
-    assert st.backfill_blocked_until > time.monotonic()
+    assert st.backfill_pending and st.backfill_not_before > time.monotonic() + 800
+
+
+def _collector(store, fetcher, **settings):
+    FakeScanner.instances.clear()
+    return Collector(Settings(**settings), store, FakeScanner, fetcher)
+
+
+def test_failed_backfill_is_retried_after_backoff(store, engine):
+    calls = []
+
+    async def flaky(target, since, timeout):
+        calls.append(since)
+        if len(calls) == 1:
+            raise TimeoutError("weak signal")
+        return HistoryResult(DeviceInfo(ADDR, "Aranet4 12345", interval_s=60), [], 2016, 0)
+
+    c = _collector(store, flaky)
+
+    def expire_backoff(_s):
+        next(iter(c._devices.values())).backfill_not_before = 0
+
+    asyncio.run(
+        drive(
+            c,
+            [
+                lambda s: s.emit(with_counter(1, ago=5)),
+                expire_backoff,
+                lambda s: s.emit(with_counter(1, ago=15)),  # re-advert of the same point
+            ],
+            settle=0.3,
+        )
+    )
+    assert calls == [None, None]
+    st = next(iter(c._devices.values()))
+    assert not st.backfill_pending and st.backfill_failures == 0
+
+
+def test_runtime_gap_triggers_backfill_since_last_row(store, engine):
+    calls = []
+
+    async def fetch(target, since, timeout):
+        calls.append(since)
+        return HistoryResult(DeviceInfo(ADDR, "Aranet4 12345", interval_s=60), [], 2016, 0)
+
+    c = _collector(store, fetch, backfill_on_start=False)
+    asyncio.run(
+        drive(
+            c,
+            [
+                lambda s: s.emit(with_counter(1, ago=600)),  # measured 10 min ago
+                lambda s: s.emit(with_counter(2, ago=5)),  # newest: ~595 s later -> gap
+            ],
+            settle=0.3,
+        )
+    )
+    assert len(calls) == 1 and calls[0] is not None
+    assert abs(calls[0] - (int(time.time()) - 600)) <= 2
+    assert n_rows(engine) == 2
+
+
+def test_constant_counter_does_not_drop_new_measurements(store, engine):
+    c = _collector(store, None, backfill_on_start=False)
+    asyncio.run(
+        drive(
+            c,
+            [
+                lambda s: s.emit(with_counter(7, ago=125)),
+                lambda s: s.emit(with_counter(7, ago=65)),  # same counter, next measurement
+                lambda s: s.emit(with_counter(7, ago=5)),
+                lambda s: s.emit(with_counter(7, ago=15)),  # re-advert of the last one
+            ],
+        )
+    )
+    assert n_rows(engine) == 3
+
+
+def test_shutdown_during_backfill_leaves_no_scanner_running(store, engine):
+    async def slow(target, since, timeout):
+        await asyncio.sleep(30)
+
+    c = _collector(store, slow)
+    asyncio.run(drive(c, [lambda s: s.emit(with_counter(1, ago=5))], settle=0.2))
+    assert all(not s.running for s in FakeScanner.instances)
+    assert not c._tasks
 
 
 def test_allow_list_filters_other_devices(store, engine):

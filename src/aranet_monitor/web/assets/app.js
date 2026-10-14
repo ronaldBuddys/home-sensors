@@ -23,8 +23,9 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
       else if (age < 5400) txt = Math.round(age / 60) + " min ago";
       else if (age < 172800) txt = Math.round(age / 3600) + " h ago";
       else txt = Math.round(age / 86400) + " d ago";
-      // A measurement is logged every ~60 s; allow for a missed advert or two.
-      if (age <= 300) return ["● Live · measured " + txt, "pill pill-live"];
+      // Allow for a missed measurement or two at the device's logging interval.
+      const staleAfter = Math.max(300, 2.5 * (latest.interval || 60));
+      if (age <= staleAfter) return ["● Live · measured " + txt, "pill pill-live"];
       return ["■ Stale · last reading " + txt, "pill pill-stale"];
     },
   },
