@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install the collector + web as systemd *user* services (no root needed).
-#   ./deploy/install-user-services.sh            install, enable and start both
+#   ./deploy/install-user-services.sh            install, enable and (re)start both
 #   ./deploy/install-user-services.sh uninstall  stop, disable and remove them
 # Settings come from .env in the repo root (see .env.example).
 # To keep them running when you are logged out / after reboot without logging in:
@@ -31,7 +31,8 @@ for u in "${UNITS[@]}"; do
   sed "s#@REPO@#$repo_sed#g" "$REPO/deploy/systemd/$u" > "$UNIT_DIR/$u"
 done
 systemctl --user daemon-reload
-systemctl --user enable --now "${UNITS[@]}"
+systemctl --user enable "${UNITS[@]}"
+systemctl --user restart "${UNITS[@]}"  # (re)start so changed units take effect
 systemctl --user --no-pager status "${UNITS[@]}" | grep -E "●|Active:" || true
 echo
 echo "logs:   journalctl --user -u aranet-collector -f"
