@@ -74,4 +74,9 @@ These are useful facts I discovered while building this project, kept for future
 - **SQLite size:** about 27 MB for a year; Postgres `readings` is about 63 MB.
 - **Raw aggregation** costs about 0.4 µs/row on SQLite: 1 y takes about 430 ms for 4 metrics.
 - **Hourly rollup** (8.8 k rows per year) brings 1 y down to about 50 ms end-to-end through the API, and rebuilding it takes 0.7 s.
-- **Startup.** The web process imports Dash/Plotly, which takes about 1–2 s. Page load in headless Chrome is about 1.9 s; most of it is the Plotly bundle (~3.5 MB, cached by the browser after first load).
+- **Startup.** The web process imports Dash/Plotly, which takes about 1–2 s.
+- **Page weight (measured).** A cold page load transfers **1.82 MB** (gzip) in 23 requests. `plotly.min.js` alone is 1.47 MB gzipped (4.8 MB raw).
+  - Cold load and render: **about 1.8 s**, with about 1 s of script execution.
+  - Warm reload: **0.25–0.54 s**. The bundle is revalidated by ETag (a 300 B 304 response).
+  - Switching presets: about 0.35 s.
+- **Rejected optimisation.** A Plotly *cartesian* partial bundle (about 0.4 MB gzipped) would cut the cold load. However, Dash registers plotly.js through the private `Dash._setup_plotlyjs()`, so swapping it means patching Dash internals. Not worth it, given the warm-cache numbers; revisit if the dashboard is served to slow mobile clients.

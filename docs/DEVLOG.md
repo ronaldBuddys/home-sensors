@@ -77,7 +77,8 @@ This is a dated, step-by-step record of what was done, what broke and how it was
   | 90 d | 35 ms | 24 ms |
   | 1 y | 55 ms | 33 ms |
 
-  Stats take under 10 ms everywhere. The page loads and renders in about 1.9 s in headless Chrome (dominated by the Dash/Plotly JS bundle), and switching presets takes about 0.35 s.
+  Stats take under 10 ms everywhere.
+- **Page load.** About 1.8 s cold (1.82 MB gzipped, of which plotly.js is 1.47 MB) and 0.25–0.5 s warm (ETag 304s). Switching presets takes about 0.35 s. I decided against swapping in a partial Plotly bundle, because it would mean patching a private Dash hook.
 - **Fewer chart points.** The dashboard asks for at most 700 points beyond 24 h. That gives daily buckets for 1 y and avoids day/night aliasing.
 - **Postgres.** The same unit tests ran unchanged on `postgres:16-alpine` (Docker, port 55432) via `ARANET_TEST_PG_URL`. The full stack (seed, serve, browser) was verified against Postgres too.
 - **Compose test found a bug.** The `simulator` service crashed on float `--history-days` in `range()`. Fixed, with a regression test.
