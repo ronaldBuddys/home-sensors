@@ -123,3 +123,13 @@ This is a dated, step-by-step record of what was done, what broke and how it was
   - `db-init` and `copy-db` of the real SQLite data work
   - a second `copy-db` run copies 0 rows
 - **Remaining step for the user:** create the schema on the server as an admin (DEPLOYMENT §5).
+
+## 2026-10-14 — Switched to the network Postgres
+
+- **Schema created.** The admin created the `aranet` schema owned by `app_role` on the network Postgres 17. `ARANET_DB_SCHEMA=aranet` was appended to `.env`; a backup of the previous `.env` is at `data/.env.bak-before-schema`, which is git-ignored.
+- **Migration.** `aranet db-init` created the 4 tables in `aranet`. `aranet copy-db --source sqlite:///data/aranet.sqlite` copied 113 readings and 9 events. After the collector and web app were restarted on Postgres, a catch-up copy found 0 missing rows.
+- **Verified.**
+  - The collector logs `writing to postgresql…`, and new readings land in `aranet.readings`.
+  - The 1.9 h of data has a spacing histogram of `{59 s: 17, 60 s: 81, 61 s: 15}`: no gaps and no duplicates. The ±1 s values are the expected `now − ago` jitter.
+  - `/api/v1/health` reports ok, and the dashboard renders from Postgres with no console errors.
+- **SQLite kept as a backup.** `data/aranet.sqlite` is left in place but no longer written to.
