@@ -7,6 +7,12 @@ __pycache__/
 dist/
 build/
 .env
+.env.*
+!.env.example
+# editor swap/lock files (e.g. nano/vim swap of .env)
+*.swp
+*.swo
+*~
 data/
 *.sqlite
 *.sqlite-*

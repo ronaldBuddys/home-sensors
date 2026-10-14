@@ -80,8 +80,8 @@ def test_postgres_url_escapes_password(monkeypatch):
     monkeypatch.delenv("ARANET_DB_URL", raising=False)
     monkeypatch.setenv("POSTGRES_HOST", "db")
     monkeypatch.setenv("POSTGRES_PASSWORD", "p@ss:w/rd#1")
-    monkeypatch.setenv("POSTGRES_DB", "sensors_db")
+    monkeypatch.setenv("POSTGRES_DB", "sensors")
     from sqlalchemy.engine import make_url
 
     u = make_url(Settings.from_env().db_url)
-    assert u.password == "p@ss:w/rd#1" and u.host == "db" and u.database == "sensors_db"
+    assert u.password == "p@ss:w/rd#1" and u.host == "db" and u.database == "sensors"

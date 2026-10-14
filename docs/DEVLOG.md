@@ -126,7 +126,7 @@ This is a dated, step-by-step record of what was done, what broke and how it was
 
 ## 2026-10-14 — Switched to the network Postgres
 
-- **Schema created.** The admin created the `aranet` schema owned by `app_role` on the network Postgres 17. `ARANET_DB_SCHEMA=aranet` was appended to `.env`; a backup of the previous `.env` is at `data/.env.bak-before-schema`, which is git-ignored.
+- **Schema created.** The admin created the `aranet` schema owned by the app role on the network Postgres 17. `ARANET_DB_SCHEMA=aranet` was appended to `.env`; a backup of the previous `.env` is at `data/.env.bak-before-schema`, which is git-ignored.
 - **Migration.** `aranet db-init` created the 4 tables in `aranet`. `aranet copy-db --source sqlite:///data/aranet.sqlite` copied 113 readings and 9 events. After the collector and web app were restarted on Postgres, a catch-up copy found 0 missing rows.
 - **Verified.**
   - The collector logs `writing to postgresql…`, and new readings land in `aranet.readings`.

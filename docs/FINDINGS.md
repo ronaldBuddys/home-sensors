@@ -4,7 +4,7 @@ These are useful facts I discovered while building this project, kept for future
 
 ## Hardware and host
 
-- **Host:** `devhost` (x86_64, Ubuntu, BlueZ). It had **no Bluetooth** until a USB dongle was added.
+- **Host:** development PC (x86_64, Ubuntu, BlueZ). It had **no Bluetooth** until a USB dongle was added.
 - **Dongle:** TP-Link **UB5A** (USB id `2357:0604`, Realtek RTL8761BU). The in-kernel `btusb`/`btrtl` driver loads it with firmware `rtl8761bu_fw.bin`, and it shows up as `hci0`.
 - **Permissions:** BLE scanning through bleak/BlueZ D-Bus works as a **normal user**, with no root and no extra capabilities.
 

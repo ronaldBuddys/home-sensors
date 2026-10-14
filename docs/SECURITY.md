@@ -12,7 +12,8 @@ The app runs on a home network. The data, indoor CO₂/temperature/humidity, is 
 - **SQL injection.** Metric names in query strings are validated against a fixed allow-list before they're used as column references. Everything else is bound parameters through SQLAlchemy.
 - **Safe CSV filenames.** CSV export filenames are sanitised to alphanumerics.
 - **Containers.** The image runs as a non-root user (uid 1000).
-- **No secrets in the repo.** `.env`, `data/` and `*.sqlite` are in `.gitignore`, and `.env.example` contains placeholders only.
+- **No secrets in the repo.** `.env`, `.env.*` (except `.env.example`), editor swap files (`*.swp`), `data/` and `*.sqlite` are in `.gitignore`, and `.env.example` contains placeholders only. An editor lock file of `.env` (`..env.swp`, header only: user, host name and path, no values) was committed once and removed; it is purged from history before publishing.
+- **No real host, database or role names** in docs and tests; placeholders are used instead.
 - **Real identifiers scrubbed.** Tests and docs use fake BLE addresses (`AA:BB:CC:…`) and device names (`Aranet4 12345`).
 
 ## Before pushing to a remote (private)

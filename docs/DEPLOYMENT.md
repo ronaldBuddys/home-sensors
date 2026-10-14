@@ -3,7 +3,7 @@
 ## 1. Prerequisites
 
 - **Linux with BlueZ** (`bluetoothd` running) and a BLE adapter.
-  - On `devhost` that's a TP-Link UB5A USB dongle (`hci0`).
+  - On the development host that's a TP-Link UB5A USB dongle (`hci0`).
   - On a Raspberry Pi 3, 4, 5 or Zero 2 W the built-in radio works.
 - **[uv](https://docs.astral.sh/uv/)**. It installs Python 3.12 itself if needed.
 - **No root needed.** BLE scanning through BlueZ D-Bus works as a normal user.
@@ -84,7 +84,7 @@ For development without systemd, use `./scripts/devctl.sh start|stop|status [col
 Run this as a Postgres admin (e.g. `postgres`) in the target database. On Postgres 15+, ordinary roles can't create tables in `public` by default, so give the app its own schema:
 
 ```sql
--- psql -h <host> -p <port> -U postgres -d sensors_db
+-- psql -h <host> -p <port> -U postgres -d <database>
 CREATE SCHEMA IF NOT EXISTS aranet AUTHORIZATION app_role;
 ```
 
@@ -97,7 +97,7 @@ If you'd rather use `public`, the alternative is `GRANT CREATE ON SCHEMA public 
 In `.env` (git-ignored):
 
 ```bash
-POSTGRES_HOST=…  POSTGRES_PORT=…  POSTGRES_DB=sensors_db  POSTGRES_USER=app_role
+POSTGRES_HOST=…  POSTGRES_PORT=…  POSTGRES_DB=<database>  POSTGRES_USER=app_role
 POSTGRES_PASSWORD=…              # special characters are fine (escaped automatically)
 ARANET_DB_SCHEMA=aranet
 ```
