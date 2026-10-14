@@ -68,14 +68,10 @@ dependencies = [
     { name = "dash" },
     { name = "fastapi" },
     { name = "plotly" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "python-dotenv" },
     { name = "sqlalchemy" },
     { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.optional-dependencies]
-postgres = [
-    { name = "psycopg", extra = ["binary"] },
 ]
 
 [package.dev-dependencies]
@@ -96,12 +92,11 @@ requires-dist = [
     { name = "dash", specifier = ">=3.0" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "plotly", specifier = ">=6.0" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
-provides-extras = ["postgres"]
 
 [package.metadata.requires-dev]
 dev = [

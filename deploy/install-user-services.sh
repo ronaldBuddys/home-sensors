@@ -18,10 +18,17 @@ if [[ "${1:-}" == "uninstall" ]]; then
   exit 0
 fi
 
+if [[ "$REPO" =~ [[:space:]] ]]; then
+  echo "the repo path must not contain whitespace (systemd unit paths): $REPO" >&2
+  exit 1
+fi
 [[ -x "$REPO/.venv/bin/aranet" ]] || (cd "$REPO" && uv sync --frozen --no-dev)
+mkdir -p "$REPO/data" && chmod 700 "$REPO/data"
+[[ -f "$REPO/.env" ]] && chmod 600 "$REPO/.env"
 mkdir -p "$UNIT_DIR"
+repo_sed=$(printf '%s' "$REPO" | sed 's/[\\&#]/\\&/g')  # escape for the sed replacement
 for u in "${UNITS[@]}"; do
-  sed "s#@REPO@#$REPO#g" "$REPO/deploy/systemd/$u" > "$UNIT_DIR/$u"
+  sed "s#@REPO@#$repo_sed#g" "$REPO/deploy/systemd/$u" > "$UNIT_DIR/$u"
 done
 systemctl --user daemon-reload
 systemctl --user enable --now "${UNITS[@]}"

@@ -10,7 +10,7 @@
 
 ```bash
 git clone <repo> aranet4-monitor && cd aranet4-monitor
-uv sync --frozen --no-dev            # add --extra postgres for Postgres
+uv sync --frozen --no-dev
 cp .env.example .env                 # edit as needed
 ```
 
@@ -75,9 +75,11 @@ systemctl --user restart aranet-web        # after changing .env or upgrading
 ./deploy/install-user-services.sh uninstall
 ```
 
-Both units read `.env` from the repo directory (the working directory), restart on failure, and stop the collector with SIGINT, which shuts it down gracefully.
+Both units read `.env` from the repo root (python-dotenv searches upward from the installed package, which is the repo for this editable install), restart on failure (forever, 5–15 s apart), and stop the collector with SIGINT, which shuts it down gracefully.
 
-For development without systemd, use `./scripts/devctl.sh start|stop|status [collector|web|web-sim]`. It works from pid files, and logs go to `data/*.log`.
+The units are sandboxed: no privilege escalation, only Unix/IP sockets, a read-only view of the filesystem except `data/`, a private `/tmp`, and `UMask=0077`. This was checked on systemd 249: BLE scanning over the system D-Bus and Postgres both work. `PrivateUsers=yes` (a user namespace) is what makes the filesystem rules take effect in a *user* unit; if a host refuses user namespaces, remove the `PrivateUsers`, `ProtectSystem`, `ProtectHome` and `PrivateTmp` lines. After editing the unit templates, re-run the install script. The script also sets `.env` to `600` and `data/` to `700`, because `.env` holds the DB and web passwords.
+
+For development without systemd, use `./scripts/devctl.sh start|stop|status [collector|web|web-sim]`. It works from pid files. Logs go to `data/*.log` and are rotated to `.log.1` on start once they pass 5 MB.
 
 ## 5. Postgres
 
@@ -120,7 +122,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE app_role IN SCHEMA aranet GRANT SELECT ON TABL
 ### Create the tables and move the SQLite data
 
 ```bash
-uv sync --frozen --no-dev --extra postgres
+uv sync --frozen --no-dev
 uv run aranet db-init                                        # creates the 4 tables (idempotent)
 uv run aranet copy-db --source sqlite:///data/aranet.sqlite  # target = the configured DB
 ```
@@ -147,7 +149,7 @@ To catch readings logged between the copy and the restart, run `copy-db` once mo
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone <repo> && cd aranet4-monitor
-uv sync --frozen --no-dev --extra postgres
+uv sync --frozen --no-dev
 echo 'ARANET_DB_URL=postgresql+psycopg://aranet:...@db-host:5432/aranet' > .env
 uv run aranet scan
 # pair as in section 3, then:

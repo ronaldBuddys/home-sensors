@@ -5,9 +5,9 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy PYTHONUNBUFFERED=1 \
     UV_PROJECT_ENVIRONMENT=/opt/venv PATH=/opt/venv/bin:$PATH
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-dev --extra postgres --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
-RUN uv sync --frozen --no-dev --extra postgres
+RUN uv sync --frozen --no-dev
 RUN useradd --create-home --uid 1000 aranet && mkdir -p /app/data && chown aranet /app/data
 USER aranet
 EXPOSE 8050

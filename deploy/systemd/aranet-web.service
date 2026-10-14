@@ -1,6 +1,7 @@
 [Unit]
 Description=Aranet Monitor web (FastAPI API + Dash dashboard)
 Documentation=file://@REPO@/docs/DEPLOYMENT.md
+# Keep retrying forever (e.g. the DB host is rebooting); each retry is RestartSec apart.
 StartLimitIntervalSec=0
 
 [Service]
@@ -10,6 +11,21 @@ ExecStart=@REPO@/.venv/bin/aranet serve
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+# Hardening (verified with systemd 249 user units: BLE via D-Bus and Postgres still work).
+# PrivateUsers=yes is what makes ProtectSystem/ProtectHome/PrivateTmp effective in a *user*
+# unit; if a host refuses user namespaces, drop those four lines (the rest still applies).
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0077
+PrivateUsers=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=@REPO@/data
 
 [Install]
 WantedBy=default.target

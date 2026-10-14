@@ -58,7 +58,7 @@ If the collector is down for less than about 3.5 days, the missing readings are 
 ## Quick start (from scratch)
 
 ```bash
-uv sync                                   # Python 3.12 env + deps (add --extra postgres for PG)
+uv sync                                   # Python 3.12 env + deps (SQLite and Postgres)
 uv run aranet scan                        # find your sensor; check readings are in the adverts
 uv run aranet collect                     # start recording (Ctrl-C to stop)
 uv run aranet serve                       # dashboard on http://127.0.0.1:8050/

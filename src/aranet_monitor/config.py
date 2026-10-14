@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 
 
 def _load_dotenv() -> None:
-    """Load ``.env`` from the working directory if python-dotenv is available."""
+    """Load ``.env`` (python-dotenv searches upward from this package, i.e. the repo root)."""
     try:
         from dotenv import load_dotenv
     except ImportError:  # pragma: no cover - dependency is declared

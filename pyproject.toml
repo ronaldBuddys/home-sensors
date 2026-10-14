@@ -15,10 +15,8 @@ dependencies = [
     "dash>=3.0",
     "plotly>=6.0",
     "python-dotenv>=1.0",
+    "psycopg[binary]>=3.2",
 ]
-
-[project.optional-dependencies]
-postgres = ["psycopg[binary]>=3.2"]
 
 [project.scripts]
 aranet = "aranet_monitor.cli:main"
