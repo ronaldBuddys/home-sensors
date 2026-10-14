@@ -352,11 +352,17 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
         Input("dates", "start_date"),
         Input("dates", "end_date"),
         Input("chart", "relayoutData"),
+        Input("device", "value"),
         State("window", "data"),
         prevent_initial_call=True,
     )
-    def choose_window(preset, d0, d1, relayout, window):
+    def choose_window(preset, d0, d1, relayout, _device, window):
         trig = ctx.triggered_id
+        if trig == "device":
+            # A zoomed/custom window belongs to the previous device; go back to a live preset.
+            base = (window or {}).get("base") or window or {}
+            p = base.get("preset") or preset or DEFAULT_PRESET
+            return {"preset": p}, p, None, None
         if trig == "preset" and preset:
             return {"preset": preset}, no_update, None, None
         if trig == "dates":

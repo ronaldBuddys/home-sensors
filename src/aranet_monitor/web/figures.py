@@ -31,6 +31,10 @@ THEMES = {
         "series": ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300"],
     },
 }
+# Smallest y-axis span per panel, so quantisation steps (0.1 °C, 1 %RH) and sensor noise
+# don't fill the whole panel and look dramatic.
+MIN_SPAN = {"temperature": 1.0, "humidity": 6.0, "pressure": 4.0}
+
 # Status palette (fixed across themes); only used where colour *means* good/warn/critical.
 STATUS = {"good": "#0ca30c", "warning": "#fab219", "critical": "#d03b3b"}
 
@@ -174,6 +178,10 @@ def timeseries_figure(
         )
         if metric == "co2":
             _co2_bands(fig, row, s, co2_warn, co2_alert, th)
+        elif metric in MIN_SPAN:
+            yr = _padded_range(s.lo[metric], s.hi[metric], MIN_SPAN[metric])
+            if yr:
+                fig.update_yaxes(range=yr, row=row, col=1)
 
     grid = {
         "showgrid": True,
@@ -212,6 +220,21 @@ def timeseries_figure(
         dragmode="zoom",
     )
     return fig
+
+
+def _padded_range(lo: list, hi: list, min_span: float) -> list[float] | None:
+    """Y range covering the data with 6 % padding, widened to at least ``min_span``."""
+    lows = [v for v in lo if v is not None]
+    highs = [v for v in hi if v is not None]
+    if not lows or not highs:
+        return None
+    a, b = min(lows), max(highs)
+    span = b - a
+    if span < min_span:
+        mid = (a + b) / 2
+        return [mid - min_span / 2, mid + min_span / 2]
+    pad = span * 0.06
+    return [a - pad, b + pad]
 
 
 def _co2_bands(fig: go.Figure, row: int, s: Series, warn: int, alert: int, th: dict) -> None:
