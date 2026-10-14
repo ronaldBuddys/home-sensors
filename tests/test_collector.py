@@ -28,8 +28,8 @@ class FakeScanner:
     async def stop(self):
         self.running = False
 
-    def emit(self, raw=REAL_ADVERT, name="Aranet4 12345", rssi=-70):
-        dev = SimpleNamespace(address=ADDR, name=name)
+    def emit(self, raw=REAL_ADVERT, name="Aranet4 12345", rssi=-70, address=ADDR):
+        dev = SimpleNamespace(address=address, name=name)
         ad = SimpleNamespace(manufacturer_data={0x0702: raw}, rssi=rssi, local_name=name)
         self.cb(dev, ad)
 
@@ -66,7 +66,9 @@ def test_collector_stores_one_row_per_measurement(store, engine):
         calls.append(since)
         return HistoryResult(DeviceInfo(ADDR, "Aranet4 12345", interval_s=60), [], 2016, 0)
 
-    c = Collector(Settings(backfill_on_start=True), store, FakeScanner, fake_history)
+    c = Collector(
+        Settings(devices=(ADDR,), backfill_on_start=True), store, FakeScanner, fake_history
+    )
     # Same counter repeated (same measurement re-advertised) -> 1 row; new counter -> new row.
     asyncio.run(
         drive(
@@ -92,7 +94,7 @@ def test_backfill_inserts_history_and_dedupes(store, engine):
         pts = [Reading(ADDR, now - 5 - 60 * k + 1, "history", co2=700 + k) for k in range(11)]
         return HistoryResult(DeviceInfo(ADDR, "Aranet4 12345", interval_s=60), pts, 2016, 1)
 
-    c = Collector(Settings(), store, FakeScanner, fake_history)
+    c = Collector(Settings(devices=(ADDR,)), store, FakeScanner, fake_history)
     asyncio.run(drive(c, [lambda s: s.emit(with_counter(1, ago=5))], settle=0.5))
     assert n_rows(engine) == 11  # 1 advert + 10 history (the duplicate was skipped)
     assert c.stats.backfilled == 10
@@ -107,7 +109,7 @@ def test_failed_backfill_is_logged_and_cools_down(store, engine):
     async def failing(target, since, timeout, **kw):
         raise TimeoutError("not paired")
 
-    c = Collector(Settings(), store, FakeScanner, failing)
+    c = Collector(Settings(devices=(ADDR,)), store, FakeScanner, failing)
     asyncio.run(drive(c, [lambda s: s.emit(with_counter(1))], settle=0.3))
     with engine.connect() as conn:
         assert n_rows(engine) == 1
@@ -121,7 +123,7 @@ def test_failed_backfill_is_logged_and_cools_down(store, engine):
 
 def _collector(store, fetcher, **settings):
     FakeScanner.instances.clear()
-    return Collector(Settings(**settings), store, FakeScanner, fetcher)
+    return Collector(Settings(**{"devices": (ADDR,), **settings}), store, FakeScanner, fetcher)
 
 
 def test_failed_backfill_is_retried_after_backoff(store, engine):
@@ -218,3 +220,61 @@ def test_log_times_and_index():
     assert first_index_after(times, None, 29) == 1
     assert first_index_after(times, 9870, 29) == 4
     assert first_index_after(times, 9990, 29) == 0
+
+
+def test_unlisted_new_device_is_not_backfilled(store, engine):
+    FakeScanner.instances.clear()
+    calls = []
+
+    async def fake_history(target, since, timeout, **kw):
+        calls.append(target)
+        return HistoryResult(DeviceInfo(ADDR, "x", interval_s=60), [], 0, 0)
+
+    c = Collector(Settings(), store, FakeScanner, fake_history)
+    asyncio.run(drive(c, [lambda s: s.emit(with_counter(1, ago=5))]))
+    assert n_rows(engine) == 1 and calls == []  # stored, but no GATT connection
+
+
+def test_unlisted_known_device_is_backfilled(store, engine):
+    FakeScanner.instances.clear()
+    dev = store.upsert_device(DeviceInfo(ADDR, "Aranet4 12345", interval_s=60))
+    old = int(time.time()) - 3600
+    store.insert_readings(dev, [Reading(ADDR, old, "adv", co2=500)], 60)
+    calls = []
+
+    async def fake_history(target, since, timeout, **kw):
+        calls.append(since)
+        return HistoryResult(DeviceInfo(ADDR, "x", interval_s=60), [], 0, 0)
+
+    c = Collector(Settings(), store, FakeScanner, fake_history)
+    asyncio.run(drive(c, [lambda s: s.emit(with_counter(1, ago=5))]))
+    assert calls == [old]
+
+
+def test_unlisted_device_cap(store, engine, monkeypatch):
+    FakeScanner.instances.clear()
+    monkeypatch.setattr(Collector, "MAX_UNLISTED_DEVICES", 2)
+    c = Collector(Settings(backfill_on_start=False), store, FakeScanner)
+    addrs = [f"AA:BB:CC:00:00:{i:02X}" for i in range(4)]
+    asyncio.run(drive(c, [lambda s, a=a: s.emit(address=a) for a in addrs]))
+    assert len(c._devices) == 2
+
+
+def test_implausible_advert_is_dropped(store, engine):
+    FakeScanner.instances.clear()
+    c = Collector(Settings(backfill_on_start=False), store, FakeScanner)
+    asyncio.run(drive(c, [lambda s: s.emit(with_counter(1, ago=5, co2=20000))]))
+    assert n_rows(engine) == 0 and not c._devices
+
+
+def test_handler_errors_are_rate_limited(store, engine, caplog):
+    FakeScanner.instances.clear()
+    c = Collector(Settings(backfill_on_start=False), store, FakeScanner)
+
+    async def boom(*a, **kw):
+        raise RuntimeError("db down")
+
+    c._handle = boom
+    asyncio.run(drive(c, [lambda s: s.emit() for _ in range(5)]))
+    assert sum("failed to handle advert" in r.getMessage() for r in caplog.records) == 1
+    assert c._suppressed_errors == 4

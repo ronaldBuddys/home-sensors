@@ -11,6 +11,7 @@ The app runs on a home network. The data, indoor CO₂/temperature/humidity, is 
 - **No unauthenticated LAN exposure by accident.** `aranet serve` refuses a non-loopback bind without `ARANET_WEB_PASSWORD` unless `--allow-no-auth` is given.
 - **Security headers.** Every response (including 401s) carries a Content-Security-Policy (everything from `'self'`, `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`. Dash needs `'unsafe-inline'`/`'unsafe-eval'` scripts.
 - **Bounded queries.** `start`/`end` must be epoch seconds in `[0, 2^32]` and a window may span at most ~2 years (CSV exports of longer histories are paged); the dashboard tolerates malformed client state instead of erroring. Basic auth also rejects unauthenticated websocket connections.
+- **Untrusted adverts.** BLE adverts are unauthenticated. Values outside physical ranges are dropped; without `ARANET_DEVICES` at most 16 devices are tracked and only devices with readings stored before the current session are backfilled over GATT, so a spoofed advert can't make the collector pause scanning to connect to it.
 - **Read-only API.** There are no write or control endpoints. Device settings (interval, integrations) are never changed by this app.
 - **SQL injection.** Metric names in query strings are validated against a fixed allow-list before they're used as column references. Everything else is bound parameters through SQLAlchemy.
 - **Safe CSV filenames.** CSV export filenames are sanitised to alphanumerics.

@@ -1,14 +1,17 @@
 """Continuous, battery-friendly collector.
 
-Normal operation is a *passive* BLE scan: with "Smart Home integrations" enabled the sensor
-broadcasts its latest measurement in every advertisement, so we never connect to it. A GATT
-connection (which costs sensor battery) is only made to backfill history:
+Normal operation only listens to BLE advertisements (bleak's default BlueZ scan; we never
+connect): with "Smart Home integrations" enabled the sensor broadcasts its latest measurement
+in every advertisement. A GATT connection (which costs sensor battery) is only made to backfill
+history, and only for *trusted* devices -- allow-listed ones (``ARANET_DEVICES``) or, without an
+allow-list, devices that already had stored readings before this session (so a spoofed advert
+can't make the collector pause scanning to connect to it):
 
 * when the measurement time of a new advert is more than ``max(gap_backfill_min_s,
   1.5 x interval)`` after the newest stored row (collector was down, scanner was paused,
   radio dropped out, ...) -- this includes the first advert after start-up;
 * at most once every ``BACKFILL_MIN_SPACING_S``; a failed attempt stays pending and is retried
-  with exponential back-off (the device keeps ~2016 records, so deferring loses nothing).
+  with exponential back-off (the device keeps ~5040 records, so deferring loses nothing).
 
 A re-advertised measurement is recognised purely by its timestamp (within interval/2 of the
 newest stored row). The advert's rolling counter byte is decoded but deliberately not relied
@@ -45,6 +48,7 @@ class _DeviceState:
     ble_device: BLEDevice | None = None
     integrations_warned: bool = False
     seen_this_session: bool = False
+    trusted: bool = False  # may be backfilled over GATT
     backfill_pending: bool = False
     backfill_since: int | None = None  # newest stored ts before the oldest unfilled gap
     backfill_running: bool = False
@@ -68,6 +72,8 @@ class Collector:
     BACKFILL_RETRY_S = 900  # first retry after a failure; doubles each time ...
     BACKFILL_RETRY_MAX_S = 6 * 3600  # ... up to this
     SCANNER_OP_TIMEOUT_S = 20
+    MAX_UNLISTED_DEVICES = 16  # without an allow-list, ignore adverts beyond this many devices
+    ERROR_LOG_EVERY_S = 60  # e.g. DB down: one traceback per minute, not one per advert
 
     def __init__(
         self,
@@ -88,6 +94,9 @@ class Collector:
         self._stop = asyncio.Event()
         self.stats = _Stats()
         self._tasks: set[asyncio.Task] = set()
+        self._last_error_log = -float("inf")
+        self._suppressed_errors = 0
+        self._cap_warned = False
 
     # ------------------------------------------------------------------ scanner
     def _on_advert(self, device: BLEDevice, ad) -> None:
@@ -115,7 +124,7 @@ class Collector:
             self._scanner = None
             return False
         self._scanner = scanner
-        log.info("passive scan started")
+        log.info("BLE scan started (listen-only)")
         return True
 
     async def _stop_scanner(self) -> None:
@@ -134,7 +143,16 @@ class Collector:
             try:
                 await self._handle(*item)
             except Exception:
-                log.exception("failed to handle advert")
+                now = time.monotonic()
+                if now - self._last_error_log < self.ERROR_LOG_EVERY_S:
+                    self._suppressed_errors += 1
+                    continue
+                self._last_error_log = now
+                log.exception(
+                    "failed to handle advert (%d similar errors suppressed)",
+                    self._suppressed_errors,
+                )
+                self._suppressed_errors = 0
 
     async def _handle(self, device: BLEDevice, name, raw: bytes, rssi, received: float) -> None:
         self.stats.adverts += 1
@@ -144,6 +162,16 @@ class Collector:
         address = parsed.device.address
         state = self._devices.get(address)
         if state is None:
+            if not self.settings.devices and len(self._devices) >= self.MAX_UNLISTED_DEVICES:
+                if not self._cap_warned:
+                    self._cap_warned = True
+                    log.warning(
+                        "ignoring new device %s: already tracking %d without an allow-list "
+                        "(set ARANET_DEVICES)",
+                        address,
+                        len(self._devices),
+                    )
+                return
             device_id = await asyncio.to_thread(
                 self.store.upsert_device, parsed.device, int(received), rssi
             )
@@ -156,6 +184,7 @@ class Collector:
                 interval_s=interval,
                 last_ts=last_ts,
                 last_meta_write=time.monotonic(),
+                trusted=bool(self.settings.devices) or last_ts is not None,
             )
             self._devices[address] = state
             log.info("tracking %s (%s) id=%s last_ts=%s", name, address, device_id, last_ts)
@@ -184,7 +213,7 @@ class Collector:
             first = not state.seen_this_session
             state.seen_this_session = True
             gap = state.last_ts is None or reading.ts - state.last_ts > self._gap_threshold(state)
-            wanted = gap and (not first or self.settings.backfill_on_start)
+            wanted = state.trusted and gap and (not first or self.settings.backfill_on_start)
             if wanted and not state.backfill_pending:
                 state.backfill_pending = True
                 state.backfill_since = state.last_ts
@@ -291,12 +320,13 @@ class Collector:
                         exc,
                         wait,
                     )
-                    await asyncio.to_thread(
-                        self.store.log_event,
-                        "backfill_error",
-                        f"{exc!r}; retry in {wait}s",
-                        state.device_id,
-                    )
+                    with contextlib.suppress(Exception):  # the DB may be down as well
+                        await asyncio.to_thread(
+                            self.store.log_event,
+                            "backfill_error",
+                            f"{exc!r}; retry in {wait}s",
+                            state.device_id,
+                        )
                 finally:
                     if not self._stop.is_set():
                         await self._start_scanner()
@@ -340,6 +370,11 @@ class Collector:
             with contextlib.suppress(NotImplementedError, RuntimeError):
                 loop.add_signal_handler(sig, self.stop)
         await asyncio.to_thread(self.store.log_event, "start", "collector started")
+        if not self.settings.devices:
+            log.warning(
+                "ARANET_DEVICES is not set: accepting adverts from any Aranet device; new "
+                "devices are not backfilled automatically (use `aranet backfill ADDR`)"
+            )
         await self._start_scanner()
         tasks = [asyncio.create_task(self._consume()), asyncio.create_task(self._watchdog())]
         try:

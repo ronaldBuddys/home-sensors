@@ -61,6 +61,8 @@ uv run aranet backfill AA:BB:CC:DD:EE:FF --all    # ~5040 records, 1-3 min; resu
 
 If a download fails partway (weak signal), just run `aranet backfill AA:BB:CC:DD:EE:FF`, without `--all`. It resumes from the first gap in the stored data, and rows already stored are never duplicated. A USB extension cable that brings the dongle closer to the sensor makes downloads much more reliable.
 
+**Set the allow-list.** Put your sensor's address in `.env` as `ARANET_DEVICES=AA:BB:CC:DD:EE:FF` (comma-separate several). Without it the collector accepts adverts from any device using Aranet's manufacturer id (anyone nearby can spoof one), tracks at most 16 devices, and only backfills devices that already had stored readings before the collector started — a brand-new device needs the manual `aranet backfill` above. Adverts with physically implausible values (e.g. CO₂ above 10,000 ppm) are dropped.
+
 The bond is stored by BlueZ on that host. You need to pair again if you move the collector to a different host (for example, a Pi), or if you "forget" the device.
 
 ## 4. Run continuously (systemd user services)

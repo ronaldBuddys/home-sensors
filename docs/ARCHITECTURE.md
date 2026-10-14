@@ -1,7 +1,7 @@
 # Architecture
 
 ```
- Aranet4 ──BLE adverts (~every 3–13 s)──▶ collector  (aranet collect; asyncio + bleak passive scan)
+ Aranet4 ──BLE adverts (~every 3–13 s)──▶ collector  (aranet collect; asyncio + bleak, listen-only)
          ◀── GATT history (startup / gaps) ─┘   │  window-dedupe insert + hourly rollup refresh
                                                 ▼
                          SQLite (WAL)  or  Postgres     ◀── one ARANET_DB_URL

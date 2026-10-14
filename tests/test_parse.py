@@ -1,5 +1,5 @@
 from aranet_monitor.ble.parse import parse_advert
-from conftest import REAL_ADVERT
+from conftest import ADDR, REAL_ADVERT
 
 
 def test_real_aranet4_advert_decodes():
@@ -30,3 +30,12 @@ def test_integrations_disabled_has_no_reading():
 def test_garbage_is_rejected():
     assert parse_advert("X", "Aranet4 1", b"\x01\x02", None) is None
     assert parse_advert("X", "Aranet4 1", b"", None) is None
+
+
+def test_implausible_values_are_rejected():
+    from aranet_monitor.ble.parse import parse_advert
+
+    raw = bytearray(REAL_ADVERT)
+    assert parse_advert(ADDR, "Aranet4 12345", bytes(raw)) is not None
+    raw[8:10] = (20000).to_bytes(2, "little")  # decodes, but beyond the sensor range
+    assert parse_advert(ADDR, "Aranet4 12345", bytes(raw)) is None

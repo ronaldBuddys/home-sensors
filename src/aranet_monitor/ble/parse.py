@@ -29,6 +29,26 @@ class ParsedAdvert:
     counter: int | None
 
 
+# Physically plausible ranges (Aranet4 spec plus margin). Anything outside is treated as a
+# corrupt or spoofed advert: it would otherwise poison the data, overflow SMALLINT columns
+# (CO₂ is a uint16 on the wire) or skew the dedupe window (interval).
+VALID_RANGES: dict[str, tuple[float, float]] = {
+    "co2": (0, 10_000),
+    "temperature": (-40, 85),
+    "humidity": (0, 100),
+    "pressure": (300, 1_100),
+    "battery": (0, 100),
+    "interval": (1, 3_600),
+    "ago": (0, 3_600),
+}
+
+
+def _plausible(**values) -> bool:
+    return all(
+        v is None or VALID_RANGES[k][0] <= v <= VALID_RANGES[k][1] for k, v in values.items()
+    )
+
+
 def _clean(value, *, cast=None):
     """Map the library's ``-1`` "no data" sentinel (and None) to None."""
     if value is None or value == -1:
@@ -50,7 +70,7 @@ def parse_advert(
     address
         BLE address of the advertiser.
     name
-        Advertised local name (may be ``None`` on passive scans).
+        Advertised local name (may be ``None`` if no scan response was received).
     raw
         Manufacturer-specific data for company id ``0x0702``.
     rssi
@@ -61,7 +81,8 @@ def parse_advert(
     Returns
     -------
     ParsedAdvert or None
-        ``None`` if the payload is not a valid Aranet advertisement.
+        ``None`` if the payload is not a valid Aranet advertisement or carries values outside
+        :data:`VALID_RANGES`.
     """
     now = time.time() if now is None else now
     device = SimpleNamespace(name=name, address=address)
@@ -90,15 +111,30 @@ def parse_advert(
 
     measured = int(round(now)) - (ago or 0)
     radon = _clean(r.radon_concentration, cast=int)
+    co2 = _clean(r.co2, cast=int)
+    temperature = _clean(r.temperature, cast=float)
+    humidity = _clean(r.humidity, cast=float)
+    pressure = _clean(r.pressure, cast=float)
+    battery = _clean(r.battery, cast=int)
+    if not _plausible(
+        co2=co2,
+        temperature=temperature,
+        humidity=humidity,
+        pressure=pressure,
+        battery=battery,
+        interval=interval,
+        ago=ago,
+    ):
+        return None
     reading = Reading(
         address=address,
         ts=measured,
         source="adv",
-        co2=_clean(r.co2, cast=int),
-        temperature=_clean(r.temperature, cast=float),
-        humidity=_clean(r.humidity, cast=float),
-        pressure=_clean(r.pressure, cast=float),
-        battery=_clean(r.battery, cast=int),
+        co2=co2,
+        temperature=temperature,
+        humidity=humidity,
+        pressure=pressure,
+        battery=battery,
         status=_clean(r.status, cast=int),
         rssi=rssi,
         radon=radon,
