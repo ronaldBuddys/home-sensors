@@ -69,3 +69,19 @@ def test_dash_is_mounted(client):
     assert layout.status_code == 200 and "kpis" in layout.text
     assert client.get("/api/docs").status_code == 200
     assert client.get("/healthz").json() == {"ok": True}
+
+
+def test_basic_auth(tmp_path):
+    import base64
+
+    url = f"sqlite:///{tmp_path}/auth.sqlite"
+    c = TestClient(create_app(Settings(db_url=url, web_password="s3cret")))
+    assert c.get("/api/v1/devices").status_code == 401
+    assert c.get("/").status_code == 401
+    assert c.get("/healthz").status_code == 200
+    bad = base64.b64encode(b"aranet:nope").decode()
+    assert c.get("/api/v1/devices", headers={"Authorization": f"Basic {bad}"}).status_code == 401
+    good = base64.b64encode(b"aranet:s3cret").decode()
+    assert c.get("/api/v1/devices", headers={"Authorization": f"Basic {good}"}).status_code == 200
+    assert c.get("/", headers={"Authorization": f"Basic {good}"}).status_code == 200
+    assert "s3cret" not in repr(Settings(web_password="s3cret"))

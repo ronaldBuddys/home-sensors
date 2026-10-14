@@ -141,8 +141,9 @@ def cmd_simulate(args, settings: Settings) -> int:
     now = int(time.time())
     last = store.last_ts(dev)
     if last is None:
-        n = store.bulk_insert_raw(dev, sim.generate(now - args.history_days * 86400, now))
+        n = store.bulk_insert_raw(dev, sim.generate(now - int(args.history_days * 86400), now))
         log.info("seeded %d simulated rows", n)
+    log.info("simulating %s every %ss (Ctrl-C to stop)", SIM_NAME, args.interval)
     try:
         while True:
             ts = int(time.time())

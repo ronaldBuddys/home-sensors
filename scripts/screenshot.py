@@ -12,6 +12,7 @@ from playwright.sync_api import sync_playwright
 
 
 def main() -> None:
+    """Take the screenshot."""
     ap = argparse.ArgumentParser()
     ap.add_argument("url")
     ap.add_argument("out")

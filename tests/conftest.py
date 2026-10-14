@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from aranet_monitor.db.queries import Queries
@@ -9,11 +11,24 @@ REAL_ADVERT = bytes.fromhex("210c000200120f013f03bb011828361c013c000e0044")
 ADDR = "AA:BB:CC:DD:EE:01"
 
 
+PG_URL = os.environ.get("ARANET_TEST_PG_URL")  # e.g. postgresql+psycopg://u:p@localhost:55432/t
+
+
 @pytest.fixture
 def engine(tmp_path):
+    """SQLite by default; the same tests run on Postgres when ARANET_TEST_PG_URL is set."""
+    if PG_URL:
+        from aranet_monitor.db.schema import metadata
+
+        eng = make_engine(PG_URL)
+        metadata.drop_all(eng)
+        init_db(eng)
+        yield eng
+        eng.dispose()
+        return
     eng = make_engine(f"sqlite:///{tmp_path}/test.sqlite")
     init_db(eng)
-    return eng
+    yield eng
 
 
 @pytest.fixture

@@ -62,6 +62,8 @@ class Settings:
     co2_alert: int = 1400
     refresh_s: int = 30
     display_tz: str | None = None  # IANA name, e.g. "Europe/London"; None = system local
+    web_user: str = "aranet"
+    web_password: str | None = field(default=None, repr=False)  # set => HTTP Basic auth on
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -83,6 +85,8 @@ class Settings:
             co2_alert=int(env.get("ARANET_CO2_ALERT", cls.co2_alert)),
             refresh_s=int(env.get("ARANET_REFRESH_S", cls.refresh_s)),
             display_tz=env.get("ARANET_TZ") or None,
+            web_user=env.get("ARANET_WEB_USER", cls.web_user),
+            web_password=env.get("ARANET_WEB_PASSWORD") or None,
         )
 
 

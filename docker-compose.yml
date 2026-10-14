@@ -1,0 +1,57 @@
+# Local Postgres + web dashboard. The collector normally runs on the host (it needs BlueZ);
+# see docs/DEPLOYMENT.md for the containerised-collector option.
+#   POSTGRES_PASSWORD=... docker compose up -d --build
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aranet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: aranet
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"   # reachable by a host-side collector; not exposed to the LAN
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aranet -d aranet"]
+      interval: 5s
+      retries: 20
+
+  web:
+    build: .
+    environment:
+      ARANET_DB_URL: postgresql+psycopg://aranet:${POSTGRES_PASSWORD}@db:5432/aranet
+      ARANET_TZ: ${ARANET_TZ:-Europe/London}
+    ports:
+      - "127.0.0.1:${ARANET_WEB_PORT:-8050}:8050"   # drop "127.0.0.1:" to expose on your LAN
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Optional: simulated sensor for demos (docker compose --profile sim up -d)
+  simulator:
+    build: .
+    profiles: ["sim"]
+    command: ["aranet", "simulate", "--history-days", "30"]
+    environment:
+      ARANET_DB_URL: postgresql+psycopg://aranet:${POSTGRES_PASSWORD}@db:5432/aranet
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Optional: collector inside Docker. Needs the host's BlueZ via D-Bus.
+  collector:
+    build: .
+    profiles: ["collector"]
+    command: ["aranet", "collect"]
+    network_mode: host
+    environment:
+      ARANET_DB_URL: postgresql+psycopg://aranet:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT:-5432}/aranet
+    volumes:
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+    security_opt:
+      - apparmor:unconfined
+    restart: unless-stopped
+
+volumes:
+  pgdata:

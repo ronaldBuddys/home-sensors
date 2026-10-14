@@ -265,7 +265,10 @@ def _co2_bands(fig: go.Figure, row: int, s: Series, warn: int, alert: int, th: d
                 showarrow=False,
                 xanchor="right",
                 yanchor="bottom",
-                font={"size": 10, "color": th["muted"]},
+                font={"size": 10, "color": th["ink2"]},
+                bgcolor=th["surface"],
+                opacity=0.9,
+                borderpad=1,
             )
     lows = [v for v in s.lo["co2"] if v is not None]
     lo = min(lows) if lows else 400

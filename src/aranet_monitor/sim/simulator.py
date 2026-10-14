@@ -98,6 +98,7 @@ class Aranet4Simulator:
 
     def generate(self, start: int, end: int) -> Iterator[Reading]:
         """Yield readings from ``start`` to ``end`` (epoch seconds) inclusive."""
+        start, end = int(start), int(end)
         start -= start % self.interval_s
         for ts in range(start, end + 1, self.interval_s):
             yield self.step(ts)
