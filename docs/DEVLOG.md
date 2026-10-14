@@ -151,3 +151,18 @@ This is a dated, step-by-step record of what was done, what broke and how it was
    - Comparing against the backup afterwards: all 4,907 comparable rows were identical, so the risk hadn't materialised.
 5. **Result.** 5,043 rows, continuous from Sun 11 Oct 04:03, with 0 duplicates and 0 gaps. The rollup counts match.
 6. **Test isolation bug.** Tests were reading the developer's real `.env`, which points at the network Postgres. An autouse fixture now disables `.env` loading and clears `ARANET_*`/`POSTGRES_*` variables in tests.
+
+## 2026-10-14 — Security review and simplification pass
+
+- **Review.** A read-only review covered secrets, git history, DB, web, BLE, deployment and dependencies (ruff `S`, bandit and pip-audit were clean apart from the simulator's `random`). The real MAC, DB password and DB host were never committed. An editor lock file of `.env` (header only) was, and real host/DB/role names were in the docs.
+- **Fixes**, one local commit each, on branch `security-simplification`:
+  - **Repo hygiene.** The lock file is removed and swap files and `.env.*` are ignored; the docs and tests are scrubbed.
+  - **Config.** The DB URL is no longer in the `Settings` repr. `serve` refuses a LAN bind without a password. `.env.example` no longer overrides `POSTGRES_*`.
+  - **DB.** `POSTGRES_SSLMODE`/`POSTGRES_SSLROOTCERT` are supported. Read-only paths no longer run DDL.
+  - **Web.** Bounded windows, security headers and CSP, Swagger UI opt-in, websocket auth, robust Dash callbacks.
+  - **Collector.** Plausibility ranges. GATT backfill only for allow-listed or previously known devices. An unlisted-device cap. Rate-limited error logs.
+  - **Deploy.** Sandboxed systemd user units (checked: BLE and Postgres still work on systemd 249), installer fixes, devctl validation and log rotation, psycopg as a core dependency.
+- **Simplification.** Dead code is removed and the two CSV exporters are merged. The CLI had written local time under a `time_utc` header; this is fixed. The unused Docker deployment is removed.
+- **Finding.** Upstream `aranet4` already maps CO₂ values with the top bit set to "no data", so the uint16 → SMALLINT overflow can't happen from adverts.
+- **Restarted** the web and collector services on the new code. Recording continued, with no GATT session triggered.
+

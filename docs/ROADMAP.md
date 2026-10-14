@@ -3,8 +3,9 @@
 ## Needs you (manual and one-time)
 
 1. ~~**Pair the sensor**~~ (done 2026-10-14; full history imported). Kept for reference: pairing is what makes history backfill work after downtime. It needs the PIN on the Aranet display; see [DEPLOYMENT.md §3](DEPLOYMENT.md#3-pair-the-sensor-one-time-needed-for-history-backfill). Then verify with `uv run aranet backfill <MAC> --last 10`. Run `aranet backfill <MAC> --all` **once**, with the collector stopped, to import the ~3.5 days (5,040 records) the sensor recorded before logging started; automatic gap detection only looks forward.
-2. **Install as services** with `./deploy/install-user-services.sh`, and optionally run `loginctl enable-linger $USER`. At the moment the collector and web app run from `scripts/devctl.sh`, so they won't survive a reboot or logout.
-3. **Point at the network Postgres** when ready: `uv sync --extra postgres`, set `ARANET_DB_URL` in `.env`, then `aranet copy-db --source sqlite:///data/aranet.sqlite --target <pg-url>`.
+2. ~~**Install as services**~~ (done). Re-run `./deploy/install-user-services.sh` after pulling unit changes (the sandboxed units), and consider `loginctl enable-linger $USER`.
+3. ~~**Point at the network Postgres**~~ (done 2026-10-14; see DEVLOG). Still open: enable TLS on the server and set `POSTGRES_SSLMODE=verify-full`; optionally give the dashboard a read-only role (DEPLOYMENT §5).
+3a. **Set `ARANET_DEVICES`** to the sensor's address in `.env` so spoofed adverts are ignored.
 4. **Before the first push** (even to a private remote): remove the `Co-Authored-By: Claude` commit trailers and settle on the author email, then rewrite history accordingly. See [SECURITY.md](SECURITY.md).
 5. **Before publishing**, work through the rest of [SECURITY.md](SECURITY.md): add a LICENSE and run a secret scan.
 

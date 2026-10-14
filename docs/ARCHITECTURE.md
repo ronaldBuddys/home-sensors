@@ -20,7 +20,7 @@ There are two processes, and they share nothing but the database. The collector 
 |---|---|
 | `config.py` | Frozen `Settings.from_env()` (env vars plus `.env`) |
 | `models.py` | `Reading` / `DeviceInfo` dataclasses; metric names and units |
-| `ble/parse.py` | Advert bytes to `Reading`. Wraps `aranet4.Aranet4Advertisement`; adds the measurement timestamp and the Aranet4 counter byte |
+| `ble/parse.py` | Advert bytes to `Reading`. Wraps `aranet4.Aranet4Advertisement`; adds the measurement timestamp and drops physically implausible values |
 | `ble/collector.py` | Passive scanner, consumer queue, new-measurement detection, backfill scheduling, watchdog |
 | `ble/history.py` | GATT history download with per-step timeouts |
 | `db/schema.py` | Tables: `devices`, `readings`, `readings_hourly`, `collector_events` |

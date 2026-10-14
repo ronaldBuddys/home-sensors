@@ -89,6 +89,7 @@ ARANET_DB_URL=sqlite:///data/sim.sqlite uv run aranet serve
 | `aranet status` | Data freshness and recent collector events, as JSON |
 | `aranet export [--start ISO] [--end ISO]` | Raw readings as CSV on stdout |
 | `aranet simulate` / `aranet seed --days N` | Synthetic data (use a separate DB) |
+| `aranet copy-db [--source URL] [--target URL]` | Copy all data between databases (idempotent; e.g. SQLite to Postgres) |
 | `aranet rollup` | Rebuild the hourly rollup table |
 | `aranet db-init` | Create the tables (`serve`, `status` and `export` never run DDL) |
 
@@ -119,7 +120,7 @@ Configuration is via environment variables or a `.env` file; see [`.env.example`
 
 ```bash
 uv run pytest                              # unit/integration tests (SQLite)
-ARANET_TEST_PG_URL=postgresql+psycopg://… uv run pytest tests/test_store.py tests/test_queries.py tests/test_rollup.py
+ARANET_TEST_PG_URL=postgresql+psycopg://… uv run pytest   # fixture-based DB tests on Postgres
 uv run --group e2e pytest -m e2e           # headless-Chrome dashboard tests (uses installed Chrome)
 uv run ruff check . && uv run ruff format .
 ./scripts/devctl.sh {start|stop|status} [collector|web|web-sim]   # dev processes w/o systemd
