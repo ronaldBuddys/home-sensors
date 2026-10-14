@@ -79,6 +79,7 @@ Configuration is via environment variables or a `.env` file; see [`.env.example`
 - [docs/FINDINGS.md](docs/FINDINGS.md): what we learned about the Aranet4, BLE/BlueZ, the libraries and performance
 - [docs/DEVLOG.md](docs/DEVLOG.md): step-by-step development log
 - [docs/SECURITY.md](docs/SECURITY.md): checklist before publishing or exposing the app
+- [docs/ROADMAP.md](docs/ROADMAP.md): manual steps still needed, next features and known limitations
 
 ## Development
 
