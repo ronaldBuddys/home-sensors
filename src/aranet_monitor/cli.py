@@ -13,7 +13,7 @@ from datetime import datetime
 
 from aranet_monitor.config import Settings
 from aranet_monitor.db.store import Store, check_schema, init_db, make_engine
-from aranet_monitor.models import METRICS, DeviceInfo
+from aranet_monitor.models import DeviceInfo
 
 log = logging.getLogger("aranet")
 
@@ -25,7 +25,7 @@ def _setup_logging(verbose: bool) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     if not verbose:
-        for noisy in ("bleak", "httpx", "uvicorn.access"):
+        for noisy in ("bleak", "uvicorn.access"):
             logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
@@ -233,11 +233,7 @@ def cmd_export(args, settings: Settings) -> int:
         device_id = devs[0]["id"]
     end = _parse_time(args.end, int(time.time()))
     start = _parse_time(args.start, 0)
-    w = csv.writer(sys.stdout)
-    w.writerow(["time_utc", "ts", "source", *METRICS])
-    for row in q.iter_rows(device_id, start, end):
-        iso = datetime.fromtimestamp(row[0], tz=None).astimezone().isoformat()
-        w.writerow([iso, *row])
+    csv.writer(sys.stdout).writerows(q.iter_csv(device_id, start, end))
     return 0
 
 

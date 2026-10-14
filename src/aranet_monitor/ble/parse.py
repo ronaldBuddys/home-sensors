@@ -1,8 +1,8 @@
 """Turn raw Aranet BLE advertisements into :class:`~aranet_monitor.models.Reading` objects.
 
 Decoding is delegated to :class:`aranet4.client.Aranet4Advertisement` so we track upstream
-format changes; this module adds null-safety, the measurement timestamp and the Aranet4
-``counter`` byte (which upstream does not decode for Aranet4).
+format changes; this module adds null-safety, plausibility checks and the measurement
+timestamp.
 """
 
 from __future__ import annotations
@@ -25,8 +25,6 @@ class ParsedAdvert:
     device: DeviceInfo
     reading: Reading | None  # None when smart-home integrations are disabled
     integrations: bool
-    ago: int | None
-    counter: int | None
 
 
 # Physically plausible ranges (Aranet4 spec plus margin). Anything outside is treated as a
@@ -99,15 +97,11 @@ def parse_advert(
     r = adv.readings
     if r is None or not mf.integrations:
         info = DeviceInfo(address=address, name=name, firmware=firmware)
-        return ParsedAdvert(info, None, bool(mf.integrations), None, None)
+        return ParsedAdvert(info, None, bool(mf.integrations))
 
     model = r.type.model if isinstance(r.type, AranetType) else None
     interval = _clean(r.interval, cast=int)
     ago = _clean(r.ago, cast=int)
-    counter = _clean(r.counter, cast=int)
-    if counter is None and r.type == AranetType.ARANET4 and len(raw) >= 22:
-        # Upstream's Aranet4 struct stops one byte short; byte 21 is a rolling counter.
-        counter = raw[21]
 
     measured = int(round(now)) - (ago or 0)
     radon = _clean(r.radon_concentration, cast=int)
@@ -144,9 +138,4 @@ def parse_advert(
     info = DeviceInfo(
         address=address, name=name, model=model, firmware=firmware, interval_s=interval
     )
-    return ParsedAdvert(info, reading, True, ago, counter)
-
-
-def looks_like_aranet(name: str | None, manufacturer_data: dict[int, bytes]) -> bool:
-    """Cheap pre-filter for scanner callbacks."""
-    return MANUFACTURER_ID in manufacturer_data or bool(name and name.startswith("Aranet"))
+    return ParsedAdvert(info, reading, True)

@@ -54,6 +54,4 @@ testpaths = ["tests"]
 addopts = "-m 'not e2e'"
 markers = [
     "e2e: browser tests (uv run --group e2e pytest -m e2e)",
-    "postgres: needs a running Postgres (ARANET_TEST_PG_URL)",
-    "ble: needs a real BLE adapter and device",
 ]

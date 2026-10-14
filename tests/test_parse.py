@@ -8,7 +8,7 @@ def test_real_aranet4_advert_decodes():
     r = p.reading
     assert (r.co2, r.humidity, r.pressure, r.battery, r.status) == (831, 54.0, 1026.4, 28, 1)
     assert abs(r.temperature - 22.15) < 0.06
-    assert p.device.interval_s == 60 and p.ago == 14 and p.counter == 0x44
+    assert p.device.interval_s == 60 and p.reading.ts == 10_000 - 14
     assert r.ts == 10_000 - 14  # measurement time, not receive time
     assert r.rssi == -80 and r.source == "adv"
     assert p.device.model == "Aranet4"

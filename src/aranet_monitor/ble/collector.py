@@ -14,8 +14,8 @@ can't make the collector pause scanning to connect to it):
   with exponential back-off (the device keeps ~5040 records, so deferring loses nothing).
 
 A re-advertised measurement is recognised purely by its timestamp (within interval/2 of the
-newest stored row). The advert's rolling counter byte is decoded but deliberately not relied
-upon, so firmware that doesn't increment it cannot cause silent data loss.
+newest stored row), not by the advert's rolling counter byte, so firmware that doesn't
+increment it cannot cause silent data loss.
 """
 
 from __future__ import annotations
@@ -334,10 +334,6 @@ class Collector:
         finally:
             state.backfill_running = False
         return n
-
-    async def backfill_now(self, address: str, since: int | None = None):
-        """One-shot backfill (CLI ``aranet backfill``)."""
-        return await self._fetch_history(address, since, timeout=self.settings.ble_timeout_s)
 
     # ------------------------------------------------------------------ watchdog
     async def _watchdog(self) -> None:

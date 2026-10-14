@@ -28,7 +28,6 @@ class Aranet4Simulator:
         self.address = address
         self.co2 = 650.0
         self.battery = 85.0
-        self.counter = 0
         # Weather: a few slow sinusoids (periods 1.5-9 days) -> smooth, realistic swings.
         self._weather = [
             (
@@ -79,7 +78,6 @@ class Aranet4Simulator:
         pressure += self.rng.gauss(0, 0.05)
         # ~2-year battery life.
         self.battery = max(1.0, self.battery - 100 / (2 * 365 * 24 * 3600 / self.interval_s))
-        self.counter = (self.counter + 1) % 256
 
         co2 = int(round(self.co2))
         status = 1 if co2 < 1000 else 2 if co2 < 1400 else 3

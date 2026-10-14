@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from aranet_monitor.config import Settings
 from aranet_monitor.db.queries import MAX_SPAN_S, RANGES, Queries
-from aranet_monitor.models import METRICS, UNITS
+from aranet_monitor.models import UNITS
 
 router = APIRouter(prefix="/api/v1", tags=["aranet"])
 
@@ -208,10 +208,8 @@ def export_csv(
     def gen() -> Iterator[str]:
         buf = io.StringIO()
         w = csv.writer(buf)
-        w.writerow(["time_utc", "ts", "source", *METRICS])
-        for row in q.iter_rows(device_id, start, end):
-            iso = datetime.fromtimestamp(row[0], tz=UTC).isoformat()
-            w.writerow([iso, *row])
+        for record in q.iter_csv(device_id, start, end):
+            w.writerow(record)
             if buf.tell() > 64_000:
                 yield buf.getvalue()
                 buf.seek(0)

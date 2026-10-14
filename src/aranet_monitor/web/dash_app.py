@@ -16,7 +16,7 @@ from aranet_monitor.db.queries import MAX_SPAN_S, RANGES, Queries
 from aranet_monitor.web import figures
 
 ASSETS = Path(__file__).parent / "assets"
-PRESETS = ["1h", "6h", "24h", "7d", "30d", "90d", "1y"]
+PRESETS = list(RANGES)  # 1h ... 1y
 DEFAULT_PRESET = "24h"
 # ~1 point per 2 px of chart width. Also picks daily buckets for 1 y (finer buckets alias the
 # day/night CO₂ cycle into a solid block) and 15 min for 7 d.
@@ -449,7 +449,7 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
         csv = f"/api/v1/devices/{device_id}/export.csv?start={start}&end={end}"
         res = "raw" if s.bucket_s == 0 else f"{_human(s.bucket_s)} averages"
         label = f"{_when(start, tz)} → {_when(end, tz)} · {res}"
-        return fig, _summary_table(st, settings), csv, label
+        return fig, _summary_table(st), csv, label
 
     # ---------------------------------------------------------------- events
     @app.callback(Output("events", "children"), Input("latest-ts", "data"))
@@ -477,7 +477,7 @@ def _when(ts: int, tz: ZoneInfo | None) -> str:
     return datetime.fromtimestamp(ts, tz).strftime("%d %b %H:%M")
 
 
-def _summary_table(st: dict, settings: Settings) -> html.Table | html.P:
+def _summary_table(st: dict) -> html.Table | html.P:
     if not st.get("n"):
         return html.P("No readings in this window.", className="muted")
     rows = []
@@ -517,5 +517,4 @@ def _summary_table(st: dict, settings: Settings) -> html.Table | html.P:
         ],
         className="exposure",
     )
-    _ = settings
     return html.Div([table, exposure])

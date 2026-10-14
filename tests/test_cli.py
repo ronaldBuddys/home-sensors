@@ -18,6 +18,7 @@ def test_seed_export_status(tmp_path, monkeypatch, capsys):
     assert cli.main(["export"]) == 0
     rows = list(csv.reader(io.StringIO(capsys.readouterr().out)))
     assert rows[0][:4] == ["time_utc", "ts", "source", "co2"] and len(rows) == 722
+    assert rows[1][0].endswith("+00:00")  # the header says UTC, so the values are UTC
     assert cli.main(["status"]) == 0
     assert '"devices"' in capsys.readouterr().out
     assert cli.main(["rollup"]) == 0

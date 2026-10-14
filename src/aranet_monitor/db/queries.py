@@ -6,6 +6,7 @@ import math
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy import Engine, and_, case, func, select
 
@@ -46,6 +47,7 @@ RANGES: dict[str, int] = {
     "90d": 90 * 86400,
     "1y": 365 * 86400,
 }
+STATS_METRICS = ("co2", "temperature", "humidity", "pressure")  # min/mean/max in stats()
 MAX_SPAN_S = 2 * 366 * 86400  # longest window one request may scan (CSV export: page by year)
 
 
@@ -283,7 +285,7 @@ class Queries:
         r = readings.c
         where = and_(r.device_id == device_id, r.ts.between(start, end))
         cols = [func.count().label("n"), func.count(r.co2).label("n_co2")]
-        for m in ("co2", "temperature", "humidity", "pressure"):
+        for m in STATS_METRICS:
             cols += [
                 func.avg(r[m]).label(f"{m}_mean"),
                 func.min(r[m]).label(f"{m}_min"),
@@ -317,7 +319,7 @@ class Queries:
         h = readings_hourly.c
         where = and_(h.device_id == device_id, h.hour.between(start - start % 3600, end))
         cols = [func.sum(h.n).label("n"), func.sum(h.co2_cnt).label("n_co2")]
-        for m in ("co2", "temperature", "humidity", "pressure"):
+        for m in STATS_METRICS:
             cols += [
                 (func.sum(h[f"{m}_sum"]) / func.nullif(func.sum(h[f"{m}_cnt"]), 0)).label(
                     f"{m}_mean"
@@ -336,6 +338,12 @@ class Queries:
         return self._finish_stats(dict(row))
 
     # ------------------------------------------------------------------ export
+    def iter_csv(self, device_id: int, start: int, end: int) -> Iterator[list]:
+        """CSV records for raw readings: a header, then ``[time_utc, ts, source, *METRICS]``."""
+        yield ["time_utc", "ts", "source", *METRICS]
+        for row in self.iter_rows(device_id, start, end):
+            yield [datetime.fromtimestamp(row[0], tz=UTC).isoformat(), *row]
+
     def iter_rows(
         self, device_id: int, start: int, end: int, chunk: int = 10000
     ) -> Iterator[tuple]:

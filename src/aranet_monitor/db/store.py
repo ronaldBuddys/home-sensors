@@ -19,7 +19,7 @@ from aranet_monitor.models import METRICS, DeviceInfo, Reading
 DEFAULT_INTERVAL_S = 60
 
 
-def make_engine(db_url: str, *, echo: bool = False, schema: str | None = None) -> Engine:
+def make_engine(db_url: str, *, schema: str | None = None) -> Engine:
     """Create an engine; SQLite gets WAL + busy timeout so collector and web can share it.
 
     ``schema`` (Postgres only) places every table in that schema instead of the default one.
@@ -27,7 +27,7 @@ def make_engine(db_url: str, *, echo: bool = False, schema: str | None = None) -
     """
     if db_url.startswith("sqlite"):
         ensure_sqlite_dir(db_url)
-        engine = create_engine(db_url, echo=echo, connect_args={"timeout": 30})
+        engine = create_engine(db_url, connect_args={"timeout": 30})
 
         @event.listens_for(engine, "connect")
         def _sqlite_pragmas(dbapi_conn, _record):  # pragma: no cover - trivial
@@ -41,7 +41,7 @@ def make_engine(db_url: str, *, echo: bool = False, schema: str | None = None) -
             cur.close()
 
         return engine
-    engine = create_engine(db_url, echo=echo, pool_pre_ping=True)
+    engine = create_engine(db_url, pool_pre_ping=True)
     if schema:
         # Every unqualified table (all of ours) is rendered as "<schema>.<table>".
         engine = engine.execution_options(schema_translate_map={None: schema})
