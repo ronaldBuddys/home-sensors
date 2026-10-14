@@ -109,7 +109,7 @@ Configuration is via environment variables or a `.env` file; see [`.env.example`
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): design, data model and the dedupe/rollup logic
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): this host, a Raspberry Pi, Postgres, Docker, and pairing
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): this host, a Raspberry Pi, Postgres, and pairing
 - [docs/FINDINGS.md](docs/FINDINGS.md): what we learned about the Aranet4, BLE/BlueZ, the libraries and performance
 - [docs/DEVLOG.md](docs/DEVLOG.md): step-by-step development log
 - [docs/SECURITY.md](docs/SECURITY.md): checklist before publishing or exposing the app

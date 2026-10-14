@@ -6,7 +6,7 @@ The app runs on a home network. The data, indoor CO₂/temperature/humidity, is 
 
 ## What the code already does
 
-- **Localhost by default.** The web server binds to `127.0.0.1`, and the docker-compose ports are bound to `127.0.0.1` too.
+- **Localhost by default.** The web server binds to `127.0.0.1`.
 - **Optional authentication.** When `ARANET_WEB_PASSWORD` is set, HTTP Basic auth covers every route, including the Dash UI. The comparison is constant-time (`secrets.compare_digest`), and `/healthz` stays open for health checks. Neither the web password nor the DB URL (which carries the DB password) appears in the settings `repr()`, and DB URLs are logged with the password masked.
 - **No unauthenticated LAN exposure by accident.** `aranet serve` refuses a non-loopback bind without `ARANET_WEB_PASSWORD` unless `--allow-no-auth` is given.
 - **Security headers.** Every response (including 401s) carries a Content-Security-Policy (everything from `'self'`, `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`. Dash needs `'unsafe-inline'`/`'unsafe-eval'` scripts.
@@ -15,7 +15,7 @@ The app runs on a home network. The data, indoor CO₂/temperature/humidity, is 
 - **Read-only API.** There are no write or control endpoints. Device settings (interval, integrations) are never changed by this app.
 - **SQL injection.** Metric names in query strings are validated against a fixed allow-list before they're used as column references. Everything else is bound parameters through SQLAlchemy.
 - **Safe CSV filenames.** CSV export filenames are sanitised to alphanumerics.
-- **Containers.** The image runs as a non-root user (uid 1000).
+- **Sandboxed services.** The systemd user units drop privileges and see a read-only filesystem except `data/` (see DEPLOYMENT §4).
 - **No secrets in the repo.** `.env`, `.env.*` (except `.env.example`), editor swap files (`*.swp`), `data/` and `*.sqlite` are in `.gitignore`, and `.env.example` contains placeholders only. An editor lock file of `.env` (`..env.swp`, header only: user, host name and path, no values) was committed once and removed; it is purged from history before publishing.
 - **No real host, database or role names** in docs and tests; placeholders are used instead.
 - **Real identifiers scrubbed.** Tests and docs use fake BLE addresses (`AA:BB:CC:…`) and device names (`Aranet4 12345`).

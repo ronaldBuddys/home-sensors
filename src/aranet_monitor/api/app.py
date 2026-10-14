@@ -19,7 +19,7 @@ from aranet_monitor.db.store import check_schema, make_engine
 class BasicAuthMiddleware:
     """Pure-ASGI HTTP Basic auth covering every route, including the mounted Dash app.
 
-    ``/healthz`` stays open for container/systemd health checks.
+    ``/healthz`` stays open for health checks.
     """
 
     def __init__(self, app, user: str, password: str):

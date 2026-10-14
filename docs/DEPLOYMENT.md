@@ -163,21 +163,7 @@ Tips:
 - Keep the Pi within a few metres of the sensor. At about −85 dBm (the signal at the desk test) adverts still arrive, but GATT connections become less reliable.
 - If the Pi's onboard Wi-Fi and Bluetooth share an antenna, a USB BLE dongle can be more reliable.
 
-## 7. Docker
-
-Compose runs Postgres and the web app, bound to localhost:
-
-```bash
-POSTGRES_PASSWORD=change-me docker compose up -d --build
-# demo data:   POSTGRES_PASSWORD=change-me docker compose --profile sim up -d
-# collector in a container (uses the host's BlueZ over D-Bus, host networking):
-#              POSTGRES_PASSWORD=change-me docker compose --profile collector up -d
-```
-
-- **Configurable ports:** `ARANET_WEB_PORT` (default 8050) and `POSTGRES_PORT` (default 5432).
-- **Collector placement:** running the collector on the host (systemd) is simpler than in Docker, because BLE in containers needs the D-Bus socket mount and an AppArmor exception.
-
-## 8. Exposing the dashboard on your LAN
+## 7. Exposing the dashboard on your LAN
 
 By default the web app binds to `127.0.0.1`. To reach it from other machines:
 
@@ -186,4 +172,4 @@ ARANET_WEB_HOST=0.0.0.0
 ARANET_WEB_PASSWORD=<something long>   # turns on HTTP Basic auth for every page and API route
 ```
 
-Basic auth sends credentials on every request. Only use it on a trusted LAN, or put a TLS reverse proxy (Caddy or nginx) in front. See [SECURITY.md](SECURITY.md).
+`aranet serve` refuses a non-loopback host without a password (override with `--allow-no-auth`). Basic auth sends credentials on every request in plain HTTP, so anyone who can sniff the LAN/Wi-Fi can read them: use a long random password, and prefer a TLS reverse proxy (Caddy or nginx) or a VPN such as Tailscale. See [SECURITY.md](SECURITY.md).
