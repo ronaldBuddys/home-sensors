@@ -19,7 +19,8 @@ The app runs on a home network. The data, indoor CO₂/temperature/humidity, is 
 
 - [ ] `git status` shows no `.env`, `data/`, `*.sqlite` or logs.
 - [ ] `git log -p | grep -iE "password|secret|token|<your sensor MAC>"` finds nothing sensitive in history. (The real MAC should only ever appear in `data/` and logs, which are ignored.)
-- [ ] The commit author email is the one you want to publish. Consider a GitHub noreply address.
+- [ ] **Decided:** remove the `Co-Authored-By: Claude <noreply@anthropic.com>` trailers from every commit message before the first push. They were added during the initial build; rewrite them out with `git filter-repo --message-callback` or an interactive rebase.
+- [ ] **To decide later:** the commit author email. Every commit so far uses the personal Gmail; pick the final address (e.g. a GitHub noreply address) and rewrite author/committer with `git filter-repo --mailmap` before pushing.
 
 ## Before making the repo public
 
