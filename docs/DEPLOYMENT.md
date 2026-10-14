@@ -51,7 +51,7 @@ uv run aranet backfill AA:BB:CC:DD:EE:FF --last 10
 # 9 new rows of 10 fetched; device holds 2016 records; 6.3s
 ```
 
-**After the first pairing, import the history recorded before the collector existed.** Automatic gap detection only fills gaps *after* the newest stored reading, so the ~33 h held on the sensor before your first stored row has to be fetched once by hand. Stop the collector for this one-off, to avoid connect-while-scanning; the short gap while it's stopped is backfilled automatically when it restarts:
+**After the first pairing, import the history recorded before the collector existed.** Automatic gap detection only fills gaps *after* the newest stored reading, so the ~3.5 days (5,040 records) held on the sensor before your first stored row has to be fetched once by hand. Stop the collector for this one-off, to avoid connect-while-scanning; the short gap while it's stopped is backfilled automatically when it restarts:
 
 ```bash
 ./scripts/devctl.sh stop collector          # or: systemctl --user stop aranet-collector

@@ -6,12 +6,46 @@ This project continuously records readings from an **Aranet4** CO₂ monitor (an
 - **FastAPI** for the REST API
 - **Plotly Dash** for the dashboard
 
+## Run it
+
+Run these from the repo directory, with `.env` configured (see [`.env.example`](.env.example)).
+
+**1. Make it permanent.** This survives logout and reboot:
+
+```bash
+./scripts/devctl.sh stop all            # stop any dev processes first
+./deploy/install-user-services.sh       # install + start aranet-collector and aranet-web
+loginctl enable-linger "$USER"          # start at boot and keep running while logged out
+```
+
+**2. View the dashboard:** open **http://127.0.0.1:8050/**. It refreshes itself every 30 s.
+
+To view it from other devices on your network, set `ARANET_WEB_HOST=0.0.0.0` and `ARANET_WEB_PASSWORD=<something>` in `.env`, then run `systemctl --user restart aranet-web`.
+
+**3. Check it's recording:**
+
+```bash
+systemctl --user status aranet-collector aranet-web    # both: active (running)
+journalctl --user -u aranet-collector -f               # live log: one reading per minute
+uv run aranet status                                   # newest reading's age + recent events
+```
+
+**Day to day:**
+
+```bash
+systemctl --user restart aranet-collector aranet-web   # after editing .env or updating code
+uv run aranet backfill AA:BB:CC:DD:EE:FF               # manual gap fill (normally automatic)
+./deploy/install-user-services.sh uninstall            # remove the services
+```
+
+If the collector is down for less than about 3.5 days, the missing readings are downloaded from the sensor automatically when it restarts. This needs a one-time [pairing](docs/DEPLOYMENT.md#3-pair-the-sensor-one-time-needed-for-history-backfill). Readings are never duplicated.
+
 ![Dashboard, 7-day view](docs/img/dashboard-7d-light.png)
 
 ## Features
 
 - **Battery-friendly collection.** With *Smart Home integrations* enabled, the sensor broadcasts each new reading in its BLE advertisements. The collector just listens, without connecting, and stores exactly one row per logged measurement.
-- **Gap backfill.** After downtime, the collector downloads the missing points from the sensor's on-device history (about 33 h at the 60 s interval) over GATT. This needs a one-time pairing; see the [pairing](docs/DEPLOYMENT.md#3-pair-the-sensor-one-time-needed-for-history-backfill) section of DEPLOYMENT.md. Advert and history timestamps are merged without duplicates.
+- **Gap backfill.** After downtime, the collector downloads the missing points from the sensor's on-device history (5,040 records: about 3.5 days at the 60 s interval) over GATT. This needs a one-time pairing; see the [pairing](docs/DEPLOYMENT.md#3-pair-the-sensor-one-time-needed-for-history-backfill) section of DEPLOYMENT.md. Advert and history timestamps are merged without duplicates.
 - **SQLite or Postgres** through one `ARANET_DB_URL`. An hourly rollup table keeps long ranges fast: 1-year views are served in about 50 ms on SQLite and 35 ms on Postgres.
 - **Dashboard:**
   - **Tiles:** live KPI tiles with CO₂ status (good/elevated/high), deltas versus 1 h ago, and 6 h sparklines.
@@ -21,7 +55,7 @@ This project continuously records readings from an **Aranet4** CO₂ monitor (an
 - **REST API** with OpenAPI docs at `/api/docs`.
 - **Simulator** (`aranet simulate` / `aranet seed`) for development without hardware.
 
-## Quick start
+## Quick start (from scratch)
 
 ```bash
 uv sync                                   # Python 3.12 env + deps (add --extra postgres for PG)
