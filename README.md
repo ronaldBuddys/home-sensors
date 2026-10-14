@@ -85,12 +85,12 @@ ARANET_DB_URL=sqlite:///data/sim.sqlite uv run aranet serve
 | `aranet scan [--seconds N]` | List nearby Aranet devices and their advertised readings |
 | `aranet collect` | Continuous passive collector with gap backfill |
 | `aranet backfill ADDR [--all] [--last N]` | Download on-device history now (requires pairing) |
-| `aranet serve [--host H] [--port P]` | API + dashboard |
+| `aranet serve [--host H] [--port P]` | API + dashboard (read-only; refuses a non-loopback host without `ARANET_WEB_PASSWORD` unless `--allow-no-auth`) |
 | `aranet status` | Data freshness and recent collector events, as JSON |
 | `aranet export [--start ISO] [--end ISO]` | Raw readings as CSV on stdout |
 | `aranet simulate` / `aranet seed --days N` | Synthetic data (use a separate DB) |
 | `aranet rollup` | Rebuild the hourly rollup table |
-| `aranet db-init` | Create the schema |
+| `aranet db-init` | Create the tables (`serve`, `status` and `export` never run DDL) |
 
 Configuration is via environment variables or a `.env` file; see [`.env.example`](.env.example).
 

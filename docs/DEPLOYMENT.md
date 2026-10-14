@@ -104,6 +104,17 @@ ARANET_DB_SCHEMA=aranet
 
 Use `ARANET_DB_URL=postgresql+psycopg://…` instead of the `POSTGRES_*` parts if you prefer a single URL; it takes precedence.
 
+**TLS.** If the server is not on the same machine, enable TLS on it and set `POSTGRES_SSLMODE=verify-full` (plus `POSTGRES_SSLROOTCERT=/path/to/ca.pem` for a private CA), or `require` if you can't verify the certificate. Without it libpq uses `prefer`: encryption is opportunistic and the server is not authenticated. With `ARANET_DB_URL`, append `?sslmode=verify-full&sslrootcert=…` instead.
+
+**Who creates tables.** Only writers run DDL: `collect`, `db-init`, `seed`/`simulate`, `rollup`, `backfill` and the `copy-db` target. `serve`, `status` and `export` only read and fail with "run `aranet db-init`" if the tables are missing. So the dashboard can optionally use its own read-only role (set its `POSTGRES_USER`/`POSTGRES_PASSWORD` in the web service's environment):
+
+```sql
+CREATE ROLE dashboard_ro LOGIN PASSWORD '…';
+GRANT USAGE ON SCHEMA aranet TO dashboard_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA aranet TO dashboard_ro;
+ALTER DEFAULT PRIVILEGES FOR ROLE app_role IN SCHEMA aranet GRANT SELECT ON TABLES TO dashboard_ro;
+```
+
 ### Create the tables and move the SQLite data
 
 ```bash

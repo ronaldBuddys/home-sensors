@@ -75,6 +75,7 @@ def test_basic_auth(tmp_path):
     import base64
 
     url = f"sqlite:///{tmp_path}/auth.sqlite"
+    init_db(make_engine(url))
     c = TestClient(create_app(Settings(db_url=url, web_password="s3cret")))
     assert c.get("/api/v1/devices").status_code == 401
     assert c.get("/").status_code == 401
@@ -85,3 +86,12 @@ def test_basic_auth(tmp_path):
     assert c.get("/api/v1/devices", headers={"Authorization": f"Basic {good}"}).status_code == 200
     assert c.get("/", headers={"Authorization": f"Basic {good}"}).status_code == 200
     assert "s3cret" not in repr(Settings(web_password="s3cret"))
+
+
+def test_web_app_does_not_create_tables(tmp_path):
+    from sqlalchemy import inspect
+
+    url = f"sqlite:///{tmp_path}/empty.sqlite"
+    with pytest.raises(RuntimeError, match="db-init"):
+        create_app(Settings(db_url=url))
+    assert inspect(make_engine(url)).get_table_names() == []

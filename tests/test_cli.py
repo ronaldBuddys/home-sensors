@@ -122,3 +122,31 @@ def test_serve_refuses_lan_bind_without_password(monkeypatch, tmp_path, capsys):
     assert "refusing" in capsys.readouterr().err
     assert cli._is_loopback("127.0.0.1") and cli._is_loopback("::1")
     assert cli._is_loopback("localhost") and not cli._is_loopback("0.0.0.0")
+
+
+def test_postgres_sslmode_from_env(monkeypatch):
+    from sqlalchemy.engine import make_url
+
+    from aranet_monitor.config import Settings
+
+    monkeypatch.setenv("POSTGRES_HOST", "db")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "x")
+    assert "sslmode" not in make_url(Settings.from_env().db_url).query
+    monkeypatch.setenv("POSTGRES_SSLMODE", "verify-full")
+    monkeypatch.setenv("POSTGRES_SSLROOTCERT", "/etc/ssl/home-ca.pem")
+    q = make_url(Settings.from_env().db_url).query
+    assert q == {"sslmode": "verify-full", "sslrootcert": "/etc/ssl/home-ca.pem"}
+
+
+def test_read_only_commands_do_not_create_tables(tmp_path, monkeypatch, capsys):
+    import pytest
+    from sqlalchemy import inspect
+
+    from aranet_monitor.db.store import make_engine
+
+    url = f"sqlite:///{tmp_path}/ro.sqlite"
+    monkeypatch.setenv("ARANET_DB_URL", url)
+    for cmd in (["status"], ["export"]):
+        with pytest.raises(RuntimeError, match="db-init"):
+            cli.main(cmd)
+    assert inspect(make_engine(url)).get_table_names() == []

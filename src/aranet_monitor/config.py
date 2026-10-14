@@ -46,6 +46,14 @@ def _postgres_url_from_parts() -> str | None:
         host=host,
         port=int(port),
         database=os.environ.get("POSTGRES_DB", "aranet"),
+        query={  # libpq TLS options; e.g. POSTGRES_SSLMODE=verify-full + POSTGRES_SSLROOTCERT
+            key: value
+            for key, value in (
+                ("sslmode", os.environ.get("POSTGRES_SSLMODE")),
+                ("sslrootcert", os.environ.get("POSTGRES_SSLROOTCERT")),
+            )
+            if value
+        },
     )
     return url.render_as_string(hide_password=False)
 

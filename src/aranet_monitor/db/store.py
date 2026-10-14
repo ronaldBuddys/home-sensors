@@ -9,6 +9,7 @@ from collections.abc import Iterable, Sequence
 from sqlalchemy import Engine, create_engine, event, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import DBAPIError
 
 from aranet_monitor.config import ensure_sqlite_dir
 from aranet_monitor.db.rollup import rebuild_rollup, refresh_rollup
@@ -55,6 +56,23 @@ def init_db(engine: Engine) -> None:
         has_rollup = conn.execute(select(readings_hourly.c.hour).limit(1)).first() is not None
         if has_raw and not has_rollup:
             rebuild_rollup(conn)
+
+
+def check_schema(engine: Engine) -> None:
+    """Fail fast if the tables are missing; read-only paths use this instead of DDL.
+
+    Only writers (collector, ``db-init``, seeding, ``copy-db`` target) create tables, so the
+    dashboard and read-only commands can run with a role that has no CREATE privilege.
+    """
+    try:
+        with engine.connect() as conn:
+            for table in (devices, readings, readings_hourly, events):
+                conn.execute(select(table).limit(0))
+    except DBAPIError as exc:
+        raise RuntimeError(
+            "database not reachable or schema missing; run `aranet db-init` "
+            f"({type(exc.orig).__name__})"
+        ) from exc
 
 
 def _insert_ignore(engine: Engine, table):
@@ -268,7 +286,7 @@ def copy_db(
 
     src = make_engine(source_url, schema=source_schema)
     dst = make_engine(target_url, schema=target_schema)
-    init_db(src)
+    check_schema(src)  # never write (DDL) to the source
     init_db(dst)
     q, out = Queries(src), Store(dst)
     counts = {"devices": 0, "readings": 0, "events": 0}
@@ -318,4 +336,4 @@ def copy_db(
     return counts
 
 
-__all__ = ["METRICS", "Store", "copy_db", "init_db", "make_engine"]
+__all__ = ["METRICS", "Store", "check_schema", "copy_db", "init_db", "make_engine"]

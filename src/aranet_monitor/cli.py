@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 
 from aranet_monitor.config import Settings
-from aranet_monitor.db.store import Store, init_db, make_engine
+from aranet_monitor.db.store import Store, check_schema, init_db, make_engine
 from aranet_monitor.models import METRICS, DeviceInfo
 
 log = logging.getLogger("aranet")
@@ -30,9 +30,19 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def _store(settings: Settings, db_url: str | None = None) -> Store:
+    """Writer access: creates missing tables (needs CREATE on the schema)."""
     engine = make_engine(db_url or settings.db_url, schema=None if db_url else settings.db_schema)
     init_db(engine)
     return Store(engine)
+
+
+def _queries(settings: Settings):
+    """Read-only access: no DDL, fails clearly if the schema is missing."""
+    from aranet_monitor.db.queries import Queries
+
+    engine = make_engine(settings.db_url, schema=settings.db_schema)
+    check_schema(engine)
+    return Queries(engine)
 
 
 def _parse_time(value: str | None, default: int) -> int:
@@ -213,10 +223,7 @@ def cmd_seed(args, settings: Settings) -> int:
 
 def cmd_export(args, settings: Settings) -> int:
     """Export raw readings as CSV to stdout."""
-    from aranet_monitor.db.queries import Queries
-
-    store = _store(settings)
-    q = Queries(store.engine)
+    q = _queries(settings)
     device_id = args.device
     if device_id is None:
         devs = q.list_devices()
@@ -236,9 +243,7 @@ def cmd_export(args, settings: Settings) -> int:
 
 def cmd_status(args, settings: Settings) -> int:
     """Print data freshness and recent collector events."""
-    from aranet_monitor.db.queries import Queries
-
-    q = Queries(_store(settings).engine)
+    q = _queries(settings)
     print(json.dumps(q.health(), indent=2, default=str))
     return 0
 

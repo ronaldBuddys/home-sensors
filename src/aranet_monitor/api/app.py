@@ -13,7 +13,7 @@ from aranet_monitor import __version__
 from aranet_monitor.api.routes import router
 from aranet_monitor.config import Settings
 from aranet_monitor.db.queries import Queries
-from aranet_monitor.db.store import init_db, make_engine
+from aranet_monitor.db.store import check_schema, make_engine
 
 
 class BasicAuthMiddleware:
@@ -67,7 +67,7 @@ def create_app(settings: Settings | None = None, *, with_dash: bool = True) -> F
     """
     settings = settings or Settings.from_env()
     engine = make_engine(settings.db_url, schema=settings.db_schema)
-    init_db(engine)
+    check_schema(engine)  # read-only: no DDL, so a read-only DB role is enough
     queries = Queries(engine)
 
     app = FastAPI(
