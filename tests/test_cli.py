@@ -28,3 +28,20 @@ def test_db_init_hides_password(monkeypatch, capsys, tmp_path):
     monkeypatch.setenv("ARANET_DB_URL", f"sqlite:///{tmp_path}/x.sqlite")
     assert cli.main(["db-init"]) == 0
     assert cli._safe_url("postgresql+psycopg://u:secret@h/db") == "postgresql+psycopg://u:***@h/db"
+
+
+def test_copy_db_is_idempotent(tmp_path, capsys):
+    a, b = f"sqlite:///{tmp_path}/a.sqlite", f"sqlite:///{tmp_path}/b.sqlite"
+    assert cli.main(["seed", "--db", a, "--days", "1"]) == 0
+    capsys.readouterr()
+    assert cli.main(["copy-db", "--source", a, "--target", b]) == 0
+    assert "1441 new reading(s)" in capsys.readouterr().out
+    assert cli.main(["copy-db", "--source", a, "--target", b]) == 0
+    assert "0 new reading(s)" in capsys.readouterr().out
+    from aranet_monitor.db.queries import Queries
+    from aranet_monitor.db.store import make_engine
+
+    qa, qb = Queries(make_engine(a)), Queries(make_engine(b))
+    sa = qa.stats(1, 0, 2**40)
+    sb = qb.stats(1, 0, 2**40)
+    assert sa["n"] == sb["n"] and sa["co2_mean"] == sb["co2_mean"]

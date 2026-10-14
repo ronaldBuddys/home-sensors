@@ -128,3 +128,19 @@ def test_theme_toggle(page):
 def test_csv_link(page, server):
     href = page.get_attribute("#csv", "href")
     assert href.startswith("/api/v1/devices/1/export.csv?start=")
+
+
+def test_device_dropdown_opens(page):
+    page.click("#device")
+    opt = page.get_by_role("option", name="Aranet4 E2E")
+    opt.wait_for(state="visible", timeout=5000)
+    box = opt.bounding_box()
+    assert box and box["width"] > 50
+
+
+def test_mobile_has_no_horizontal_overflow(browser, server):
+    pg = browser.new_page(viewport={"width": 390, "height": 844})
+    pg.goto(server, wait_until="networkidle")
+    pg.wait_for_selector("#chart .main-svg")
+    assert pg.evaluate("document.documentElement.scrollWidth") <= 390
+    pg.close()

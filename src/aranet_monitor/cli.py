@@ -199,6 +199,23 @@ def cmd_status(args, settings: Settings) -> int:
     return 0
 
 
+def cmd_copy_db(args, settings: Settings) -> int:
+    """Copy all data from one database to another (idempotent)."""
+    from aranet_monitor.db.store import copy_db
+
+    source = args.source or settings.db_url
+    if source == args.target:
+        print("source and target are the same", file=sys.stderr)
+        return 2
+    t0 = time.monotonic()
+    counts = copy_db(source, args.target)
+    print(
+        f"copied {counts['devices']} device(s), {counts['readings']} new reading(s), "
+        f"{counts['events']} event(s) to {_safe_url(args.target)} in {time.monotonic() - t0:.1f}s"
+    )
+    return 0
+
+
 def cmd_rollup(args, settings: Settings) -> int:
     """Rebuild the hourly rollup table from raw readings."""
     store = _store(settings)
@@ -271,6 +288,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("status", help="show data freshness and recent events")
     s.set_defaults(func=cmd_status)
+
+    s = sub.add_parser("copy-db", help="copy data between databases (e.g. SQLite -> Postgres)")
+    s.add_argument("--source", help="DB URL to read (default: ARANET_DB_URL)")
+    s.add_argument("--target", required=True, help="DB URL to write")
+    s.set_defaults(func=cmd_copy_db)
 
     s = sub.add_parser("rollup", help="rebuild the hourly rollup table")
     s.set_defaults(func=cmd_rollup)

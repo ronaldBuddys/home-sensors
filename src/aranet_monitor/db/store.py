@@ -6,7 +6,7 @@ import bisect
 import time
 from collections.abc import Iterable, Sequence
 
-from sqlalchemy import Engine, create_engine, event, insert, select, update
+from sqlalchemy import Engine, create_engine, event, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -213,4 +213,66 @@ class Store:
             )
 
 
-__all__ = ["METRICS", "Store", "init_db", "make_engine"]
+def copy_db(source_url: str, target_url: str, chunk: int = 10_000) -> dict[str, int]:
+    """Copy devices, readings and events between databases (e.g. SQLite -> Postgres).
+
+    Idempotent: readings go through the window-dedupe insert, events newer than the target's
+    newest event are appended, and the hourly rollup is refreshed as rows arrive.
+    """
+    from aranet_monitor.db.queries import Queries
+
+    src, dst = make_engine(source_url), make_engine(target_url)
+    init_db(src)
+    init_db(dst)
+    q, out = Queries(src), Store(dst)
+    counts = {"devices": 0, "readings": 0, "events": 0}
+    id_map: dict[int, int] = {}
+    with src.connect() as conn:
+        rows = conn.execute(select(devices)).mappings().all()
+    for d in rows:
+        info = DeviceInfo(d["address"], d["name"], d["model"], d["firmware"], d["interval_s"])
+        new_id = out.upsert_device(info, seen=d["last_seen"], rssi=d["last_rssi"])
+        with dst.begin() as conn:
+            cur = conn.execute(select(devices.c.first_seen).where(devices.c.id == new_id)).scalar()
+            if d["first_seen"] and (cur is None or d["first_seen"] < cur):
+                conn.execute(
+                    update(devices).where(devices.c.id == new_id).values(first_seen=d["first_seen"])
+                )
+        id_map[d["id"]] = new_id
+        counts["devices"] += 1
+        interval = d["interval_s"] or DEFAULT_INTERVAL_S
+        batch: list[Reading] = []
+        for row in q.iter_rows(d["id"], 0, 2**62, chunk=chunk):
+            ts, source, *vals = row
+            batch.append(
+                Reading(d["address"], int(ts), source, **dict(zip(METRICS, vals, strict=True)))
+            )
+            if len(batch) >= chunk:
+                counts["readings"] += out.insert_readings(new_id, batch, interval)
+                batch = []
+        if batch:
+            counts["readings"] += out.insert_readings(new_id, batch, interval)
+
+    with dst.connect() as conn:
+        newest = conn.execute(select(func.max(events.c.ts))).scalar() or -1
+    with src.connect() as conn:
+        evs = conn.execute(
+            select(events).where(events.c.ts > newest).order_by(events.c.id)
+        ).mappings()
+        payload = [
+            {
+                "ts": e["ts"],
+                "device_id": id_map.get(e["device_id"]),
+                "kind": e["kind"],
+                "detail": e["detail"],
+            }
+            for e in evs
+        ]
+    if payload:
+        with dst.begin() as conn:
+            conn.execute(insert(events), payload)
+    counts["events"] = len(payload)
+    return counts
+
+
+__all__ = ["METRICS", "Store", "copy_db", "init_db", "make_engine"]

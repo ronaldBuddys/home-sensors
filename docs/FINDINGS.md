@@ -47,3 +47,31 @@ These are useful facts I discovered while building this project, kept for future
 - **Timestamps.** The library computes history timestamps on the host as `now − ago − (total−1−i)·interval`, exactly as `ble/history.py:log_times` does. Like adverts, they jitter by about ±1 s.
 - **Scanner conflicts.** BlueZ connect-while-scanning is unreliable, so the collector **stops the scanner during a backfill** and restarts it afterwards.
 - **D-Bus noise.** After a failed or cancelled connect, `dbus-fast` leaves orphaned futures that raise `BrokenPipeError` ("Future exception was never retrieved"). It's harmless; the collector's loop exception handler downgrades it to debug.
+
+## Libraries and frameworks
+
+- **Dash 4.4** (released 2026) replaced the old React-Select/react-dates based components:
+  - `RadioItems` renders `label.dash-options-list-option` (`.selected` / `aria-selected`) containing the input
+  - `Dropdown` is a `button.dash-dropdown` with a portal popover
+  - `DatePickerRange` uses `.dash-datepicker-*` classes
+  - theming is through CSS custom properties (`--Dash-Fill-Interactive-Strong`, `--Dash-Text-Primary`, `--Dash-Stroke-Weak`, …)
+  - a hidden `.dash-dropdown-focus-target` can overflow narrow viewports; clip it with `overflow-x: clip` on a container
+- **Dash under FastAPI.** Dash 4 mounts cleanly under FastAPI with `a2wsgi.WSGIMiddleware(dash_app.server)`. Set Dash `compress=False` and let `GZipMiddleware` compress everything once.
+- **Starlette TestClient** warns that `httpx` is deprecated in favour of **`httpx2`** (the pydantic-maintained fork); the dev dependency is now `httpx2`.
+- **SQLAlchemy 2.x** `/` on integer columns is true division; use `//` for SQL integer bucket maths (`(ts // bucket) * bucket`). This works the same on SQLite and Postgres.
+- **SQLite `INSERT … SELECT … ON CONFLICT DO UPDATE`** (used for the rollup upsert) needs a `WHERE` in the SELECT to avoid a parser ambiguity. Our select always has one.
+- **Postgres numbers.** Postgres returns `numeric` (`Decimal`) for `avg`/sums of integers, so the query layer converts to float before JSON.
+- **Plotly.** `hoversubplots="axis"` with `hovermode="x unified"` gives one tooltip across stacked subplots that share an x-axis.
+- **Playwright** can drive the system Google Chrome with `channel="chrome"`; no `playwright install` download is needed.
+
+## Data and visualisation
+
+- **CO₂ day/night cycle.** Indoor CO₂ has a strong day/night cycle (bedroom overnight ramps). Any bucket shorter than a day (6 h, 12 h) aliases into a sawtooth "solid block" on a 1-year chart, so long windows use daily buckets.
+- **Integer humidity.** The Aranet4 reports RH as an integer %, so raw RH charts look stepped. This is expected.
+
+## Performance (1 year at 60 s ≈ 525 k rows per sensor)
+
+- **SQLite size:** about 27 MB for a year; Postgres `readings` is about 63 MB.
+- **Raw aggregation** costs about 0.4 µs/row on SQLite: 1 y takes about 430 ms for 4 metrics.
+- **Hourly rollup** (8.8 k rows per year) brings 1 y down to about 50 ms end-to-end through the API, and rebuilding it takes 0.7 s.
+- **Startup.** The web process imports Dash/Plotly, which takes about 1–2 s. Page load in headless Chrome is about 1.9 s; most of it is the Plotly bundle (~3.5 MB, cached by the browser after first load).

@@ -37,7 +37,7 @@ html, body { margin: 0; background: var(--page); color: var(--ink); font-family:
 body { font-size: 14px; line-height: 1.4; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-.page { max-width: 1280px; margin: 0 auto; padding: 0 20px 28px; }
+.page { max-width: 1280px; margin: 0 auto; padding: 0 20px 28px; overflow-x: clip; }
 .muted { color: var(--muted); }
 
 /* top bar */
@@ -145,3 +145,12 @@ footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 1
   .kpi-hero { grid-column: 1 / -1; }
   .window-label { margin-left: 0; width: 100%; }
 }
+@media (max-width: 600px) {
+  .page { padding: 0 12px 20px; }
+  .topbar-right { flex-wrap: wrap; width: 100%; }
+  .device-select { min-width: 0; flex: 1; }
+  table.summary { min-width: 0; width: 100%; }
+  table.summary th, table.summary td { padding-right: 8px; }
+  .kpi-hero .kpi-value { font-size: 44px; }
+}
+#summary { overflow-x: auto; }
