@@ -32,5 +32,13 @@ def device_id(store):
 
 
 def make_reading(ts, co2=800, source="adv", **kw):
-    return Reading(address=ADDR, ts=ts, source=source, co2=co2, temperature=21.0,
-                   humidity=50.0, pressure=1010.0, **kw)
+    return Reading(
+        address=ADDR,
+        ts=ts,
+        source=source,
+        co2=co2,
+        temperature=21.0,
+        humidity=50.0,
+        pressure=1010.0,
+        **kw,
+    )

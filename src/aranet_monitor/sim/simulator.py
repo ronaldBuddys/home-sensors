@@ -27,24 +27,31 @@ class Aranet4Simulator:
         self.interval_s = interval_s
         self.address = address
         self.co2 = 650.0
-        self.pressure = 1013.0
-        self.p_trend = 0.0
-        self.battery = 100.0
+        self.battery = 85.0
         self.counter = 0
+        # Weather: a few slow sinusoids (periods 1.5-9 days) -> smooth, realistic swings.
+        self._weather = [
+            (
+                self.rng.uniform(2.0, 8.0),
+                self.rng.uniform(1.5, 9.0) * 86400,
+                self.rng.uniform(0, 6.3),
+            )
+            for _ in range(4)
+        ]
 
     def _occupants(self, dt: datetime) -> tuple[float, float]:
         """Return (people, air changes per hour) for a local datetime."""
         h = dt.hour + dt.minute / 60
         weekend = dt.weekday() >= 5
         if h < 7 or h >= 23:  # asleep, door mostly closed
-            return 2.0, 0.35
+            return 2.0, 0.65
         if 7 <= h < 8.5:
-            return 2.0, 1.2  # window opened in the morning
+            return 2.0, 2.0  # window opened in the morning
         if not weekend and 9 <= h < 17.5:
-            return (1.0 if dt.weekday() in (1, 3) else 0.0), 0.6  # WFH some days
+            return (1.0 if dt.weekday() in (1, 3) else 0.0), 0.8  # WFH some days
         if 18 <= h < 22:
-            return 3.0 if weekend and 19 <= h < 21 else 2.0, 0.7
-        return 1.0, 0.8
+            return (3.0 if weekend and 19 <= h < 21 else 2.0), 1.1
+        return 1.0, 1.0
 
     def step(self, ts: int) -> Reading:
         """Advance one interval and return the reading at ``ts``."""
@@ -66,9 +73,12 @@ class Aranet4Simulator:
         temp += 0.15 * people + self.rng.gauss(0, 0.05)
         hum = 52 - 2.2 * (temp - 20.5) + 1.8 * people / 3 + self.rng.gauss(0, 0.4)
 
-        self.p_trend = 0.995 * self.p_trend + self.rng.gauss(0, 0.012)
-        self.pressure += self.p_trend - 0.0005 * (self.pressure - 1013)
-        self.battery = max(1.0, self.battery - 100 / (365 * 24 * 3600 / self.interval_s))
+        pressure = 1013.0 + sum(
+            a * math.sin(2 * math.pi * ts / p + ph) for a, p, ph in self._weather
+        )
+        pressure += self.rng.gauss(0, 0.05)
+        # ~2-year battery life.
+        self.battery = max(1.0, self.battery - 100 / (2 * 365 * 24 * 3600 / self.interval_s))
         self.counter = (self.counter + 1) % 256
 
         co2 = int(round(self.co2))
@@ -80,7 +90,7 @@ class Aranet4Simulator:
             co2=co2,
             temperature=round(temp * 20) / 20,
             humidity=float(round(min(max(hum, 20), 85))),
-            pressure=round(self.pressure, 1),
+            pressure=round(pressure, 1),
             battery=int(self.battery),
             status=status,
             rssi=int(-70 + self.rng.gauss(0, 3)),

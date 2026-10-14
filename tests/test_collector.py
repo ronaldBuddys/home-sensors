@@ -68,11 +68,16 @@ def test_collector_stores_one_row_per_measurement(store, engine):
 
     c = Collector(Settings(backfill_on_start=True), store, FakeScanner, fake_history)
     # Same counter repeated (same measurement re-advertised) -> 1 row; new counter -> new row.
-    asyncio.run(drive(c, [
-        lambda s: s.emit(with_counter(10, ago=5)),
-        lambda s: s.emit(with_counter(10, ago=15)),
-        lambda s: s.emit(with_counter(10, ago=25)),
-    ]))
+    asyncio.run(
+        drive(
+            c,
+            [
+                lambda s: s.emit(with_counter(10, ago=5)),
+                lambda s: s.emit(with_counter(10, ago=15)),
+                lambda s: s.emit(with_counter(10, ago=25)),
+            ],
+        )
+    )
     assert n_rows(engine) == 1
     assert calls == [None]  # empty DB -> one startup backfill of everything
     assert c.stats.adverts == 3 and c.stats.stored == 1
@@ -114,7 +119,9 @@ def test_failed_backfill_is_logged_and_cools_down(store, engine):
 
 def test_allow_list_filters_other_devices(store, engine):
     FakeScanner.instances.clear()
-    c = Collector(Settings(devices=("11:22:33:44:55:66",), backfill_on_start=False), store, FakeScanner)
+    c = Collector(
+        Settings(devices=("11:22:33:44:55:66",), backfill_on_start=False), store, FakeScanner
+    )
     asyncio.run(drive(c, [lambda s: s.emit()]))
     assert n_rows(engine) == 0
 

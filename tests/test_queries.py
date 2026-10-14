@@ -13,7 +13,9 @@ def test_pick_bucket():
 
 
 def test_raw_series(store, queries, device_id):
-    store.insert_readings(device_id, [make_reading(t, co2=400 + t // 60) for t in range(0, 600, 60)], 60)
+    store.insert_readings(
+        device_id, [make_reading(t, co2=400 + t // 60) for t in range(0, 600, 60)], 60
+    )
     s = queries.series(device_id, 0, 600, ["co2"])
     assert s.bucket_s == 0 and len(s.t) == 10
     assert s.mean["co2"][0] == 400 and s.mean["co2"][-1] == 409
@@ -44,7 +46,9 @@ def test_unknown_metric_rejected(queries, device_id):
 
 
 def test_latest_and_stats(store, queries, device_id):
-    store.insert_readings(device_id, [make_reading(0, co2=900, battery=50), make_reading(60, co2=1500)], 60)
+    store.insert_readings(
+        device_id, [make_reading(0, co2=900, battery=50), make_reading(60, co2=1500)], 60
+    )
     latest = queries.latest(device_id)
     assert latest["co2"] == 1500 and latest["previous"]["co2"] == 900
     assert latest["battery"] == 50  # falls back to last known battery

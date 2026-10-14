@@ -11,7 +11,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from aranet_monitor.config import ensure_sqlite_dir
-from aranet_monitor.db.schema import devices, events, metadata, readings
+from aranet_monitor.db.rollup import rebuild_rollup, refresh_rollup
+from aranet_monitor.db.schema import devices, events, metadata, readings, readings_hourly
 from aranet_monitor.models import METRICS, DeviceInfo, Reading
 
 DEFAULT_INTERVAL_S = 60
@@ -39,8 +40,13 @@ def make_engine(db_url: str, *, echo: bool = False) -> Engine:
 
 
 def init_db(engine: Engine) -> None:
-    """Create tables if missing (idempotent)."""
+    """Create tables if missing (idempotent) and backfill the hourly rollup if it is empty."""
     metadata.create_all(engine)
+    with engine.begin() as conn:
+        has_raw = conn.execute(select(readings.c.ts).limit(1)).first() is not None
+        has_rollup = conn.execute(select(readings_hourly.c.hour).limit(1)).first() is not None
+        if has_raw and not has_rollup:
+            rebuild_rollup(conn)
 
 
 def _insert_ignore(engine: Engine, table):
@@ -164,16 +170,20 @@ class Store:
             # Chunk to stay below SQLite's bound-parameter limit on large backfills/seeds.
             for start in range(0, len(rows), 500):
                 conn.execute(stmt, rows[start : start + 500])
+            refresh_rollup(conn, device_id, rows[0]["ts"], rows[-1]["ts"])
             return len(rows)
 
     def bulk_insert_raw(self, device_id: int, batch: Iterable[Reading], chunk: int = 5000) -> int:
         """Fast path without window dedupe (used by the seeder on an empty range)."""
         stmt = _insert_ignore(self.engine, readings)
         n = 0
+        lo = hi = None
         buf: list[dict] = []
         with self.engine.begin() as conn:
             for r in batch:
                 buf.append({"device_id": device_id, "ts": r.ts, "source": r.source, **r.values()})
+                lo = r.ts if lo is None else min(lo, r.ts)
+                hi = r.ts if hi is None else max(hi, r.ts)
                 if len(buf) >= chunk:
                     conn.execute(stmt, buf)
                     n += len(buf)
@@ -181,7 +191,16 @@ class Store:
             if buf:
                 conn.execute(stmt, buf)
                 n += len(buf)
+            if lo is not None:
+                step = 30 * 86400
+                for start in range(lo, hi + 1, step):
+                    refresh_rollup(conn, device_id, start, min(hi, start + step - 1))
         return n
+
+    def rebuild_rollup(self, device_id: int | None = None) -> int:
+        """Recompute the hourly rollup from raw readings; returns hours written."""
+        with self.engine.begin() as conn:
+            return rebuild_rollup(conn, device_id)
 
     # ------------------------------------------------------------------ events
     def log_event(self, kind: str, detail: str = "", device_id: int | None = None) -> None:

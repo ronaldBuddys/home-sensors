@@ -61,6 +61,7 @@ class Settings:
     co2_warn: int = 1000
     co2_alert: int = 1400
     refresh_s: int = 30
+    display_tz: str | None = None  # IANA name, e.g. "Europe/London"; None = system local
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -81,6 +82,7 @@ class Settings:
             co2_warn=int(env.get("ARANET_CO2_WARN", cls.co2_warn)),
             co2_alert=int(env.get("ARANET_CO2_ALERT", cls.co2_alert)),
             refresh_s=int(env.get("ARANET_REFRESH_S", cls.refresh_s)),
+            display_tz=env.get("ARANET_TZ") or None,
         )
 
 

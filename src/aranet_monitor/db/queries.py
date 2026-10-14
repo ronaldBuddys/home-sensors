@@ -9,7 +9,14 @@ from dataclasses import dataclass
 
 from sqlalchemy import Engine, and_, case, func, select
 
-from aranet_monitor.db.schema import devices, events, readings
+from aranet_monitor.db.schema import (
+    CO2_LEVELS,
+    ROLLUP_METRICS,
+    devices,
+    events,
+    readings,
+    readings_hourly,
+)
 from aranet_monitor.models import METRICS, SERIES_METRICS
 
 # Bucket sizes (seconds) the aggregator snaps to, so bucket edges land on "nice" times.
@@ -157,6 +164,22 @@ class Queries:
                 select(func.max(readings.c.ts)).where(readings.c.device_id == device_id)
             ).scalar()
 
+    def value_at(self, device_id: int, ts: int, tolerance_s: int = 600) -> dict | None:
+        """Reading closest to (at or before) ``ts`` within ``tolerance_s``; for deltas."""
+        with self.engine.connect() as conn:
+            row = (
+                conn.execute(
+                    select(readings)
+                    .where(readings.c.device_id == device_id)
+                    .where(readings.c.ts.between(ts - tolerance_s, ts))
+                    .order_by(readings.c.ts.desc())
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+        return dict(row) if row else None
+
     # ------------------------------------------------------------------ series
     def series(
         self,
@@ -176,9 +199,28 @@ class Queries:
         metrics = _validate_metrics(metrics)
         bucket = pick_bucket(end - start, max_points, raw_interval_s)
         where = and_(readings.c.device_id == device_id, readings.c.ts.between(start, end))
+        use_rollup = bucket >= 3600 and bucket % 3600 == 0 and set(metrics) <= set(ROLLUP_METRICS)
         if bucket == 0:
             cols = [readings.c.ts] + [readings.c[m] for m in metrics]
             stmt = select(*cols).where(where).order_by(readings.c.ts)
+        elif use_rollup:
+            h = readings_hourly.c
+            b = (h.hour // bucket) * bucket
+            cols = [b.label("ts"), func.sum(h.n).label("n")]
+            for m in metrics:
+                cols += [
+                    (func.sum(h[f"{m}_sum"]) / func.nullif(func.sum(h[f"{m}_cnt"]), 0)).label(
+                        f"{m}__mean"
+                    ),
+                    func.min(h[f"{m}_min"]).label(f"{m}__min"),
+                    func.max(h[f"{m}_max"]).label(f"{m}__max"),
+                ]
+            stmt = (
+                select(*cols)
+                .where(h.device_id == device_id, h.hour.between(start - start % 3600, end))
+                .group_by(b)
+                .order_by(b)
+            )
         else:
             b = (readings.c.ts // bucket) * bucket
             cols = [b.label("ts"), func.count().label("n")]
@@ -229,7 +271,13 @@ class Queries:
     def stats(
         self, device_id: int, start: int, end: int, co2_warn: int = 1000, co2_alert: int = 1400
     ) -> dict:
-        """Summary statistics for a window (CO₂ exposure bands, min/mean/max per metric)."""
+        """Summary statistics for a window (CO₂ exposure bands, min/mean/max per metric).
+
+        Windows longer than 7 days are answered from the hourly rollup (hour-aligned edges)
+        when the thresholds are among the pre-computed ``CO2_LEVELS``.
+        """
+        if end - start > 7 * 86400 and co2_warn in CO2_LEVELS and co2_alert in CO2_LEVELS:
+            return self._stats_rollup(device_id, start, end, co2_warn, co2_alert)
         r = readings.c
         where = and_(r.device_id == device_id, r.ts.between(start, end))
         cols = [func.count().label("n"), func.count(r.co2).label("n_co2")]
@@ -247,11 +295,43 @@ class Queries:
         ]
         with self.engine.connect() as conn:
             row = conn.execute(select(*cols).where(where)).mappings().first()
-        out = {k: _round(v) if isinstance(v, float) else v for k, v in dict(row).items()}
+        return self._finish_stats(dict(row))
+
+    @staticmethod
+    def _finish_stats(row: dict) -> dict:
+        out = {
+            k: (int(v) if k.startswith("n") else _round(v)) if v is not None else None
+            for k, v in row.items()
+        }
+        out["n"] = out.get("n") or 0
         n_co2 = out.get("n_co2") or 0
         out["pct_warn"] = round(100 * (out["n_warn"] or 0) / n_co2, 1) if n_co2 else None
         out["pct_alert"] = round(100 * (out["n_alert"] or 0) / n_co2, 1) if n_co2 else None
         return out
+
+    def _stats_rollup(
+        self, device_id: int, start: int, end: int, co2_warn: int, co2_alert: int
+    ) -> dict:
+        h = readings_hourly.c
+        where = and_(h.device_id == device_id, h.hour.between(start - start % 3600, end))
+        cols = [func.sum(h.n).label("n"), func.sum(h.co2_cnt).label("n_co2")]
+        for m in ("co2", "temperature", "humidity", "pressure"):
+            cols += [
+                (func.sum(h[f"{m}_sum"]) / func.nullif(func.sum(h[f"{m}_cnt"]), 0)).label(
+                    f"{m}_mean"
+                ),
+                func.min(h[f"{m}_min"]).label(f"{m}_min"),
+                func.max(h[f"{m}_max"]).label(f"{m}_max"),
+            ]
+        cols += [
+            func.sum(h[f"co2_ge_{co2_alert}"]).label("n_alert"),
+            (func.sum(h[f"co2_ge_{co2_warn}"]) - func.sum(h[f"co2_ge_{co2_alert}"])).label(
+                "n_warn"
+            ),
+        ]
+        with self.engine.connect() as conn:
+            row = conn.execute(select(*cols).where(where)).mappings().first()
+        return self._finish_stats(dict(row))
 
     # ------------------------------------------------------------------ export
     def iter_rows(

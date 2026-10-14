@@ -1,0 +1,147 @@
+/* Aranet Monitor — palette per dataviz reference (light/dark selected, not auto-flipped). */
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --border: rgba(11, 11, 11, 0.10);
+  --accent: #2a78d6;
+  --good: #0ca30c;
+  --good-ink: #006300;
+  --warning: #fab219;
+  --warning-ink: #8a5a00;
+  --critical: #d03b3b;
+  --critical-ink: #b02727;
+  --radius: 10px;
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --ink: #f0efec;
+  --ink2: #c3c2b7;
+  --muted: #898781;
+  --grid: #2c2c2a;
+  --border: rgba(255, 255, 255, 0.10);
+  --accent: #3987e5;
+  --good-ink: #0ca30c;
+  --warning-ink: #fab219;
+  --critical-ink: #e66767;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--page); color: var(--ink); font-family: var(--font); }
+body { font-size: 14px; line-height: 1.4; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.page { max-width: 1280px; margin: 0 auto; padding: 0 20px 28px; }
+.muted { color: var(--muted); }
+
+/* top bar */
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 16px 0 12px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 8px; }
+.brand h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+.brand-dot { color: var(--accent); font-size: 14px; }
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+.pill { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--ink2); white-space: nowrap; }
+.pill-live { color: var(--good-ink); }
+.pill-stale { color: var(--critical-ink); }
+.icon-btn { border: 1px solid var(--border); background: var(--surface); color: var(--ink2);
+  border-radius: 8px; height: 34px; padding: 0 12px; cursor: pointer; font-size: 13px; }
+.icon-btn:hover { color: var(--ink); }
+
+/* cards */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px; }
+.card h2 { font-size: 13px; font-weight: 600; color: var(--ink2); margin: 0 0 10px; }
+.card.empty { color: var(--ink2); padding: 28px; text-align: center; grid-column: 1 / -1; }
+main > .card { margin-top: 14px; }
+
+/* KPI tiles */
+.kpis { display: grid; grid-template-columns: 1.35fr repeat(3, 1fr) 0.8fr; gap: 12px; }
+.kpi { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.kpi-label { font-size: 12px; color: var(--ink2); font-weight: 500; }
+.kpi-value { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; }
+.kpi-hero .kpi-value { font-size: 52px; line-height: 1.05; }
+.kpi-unit { font-size: 13px; color: var(--muted); margin-left: 5px; }
+.kpi-delta { font-size: 12px; color: var(--ink2); min-height: 17px; }
+.spark { height: 36px; margin-top: auto; }
+.status { font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+.status-icon { font-size: 11px; }
+.status-good { color: var(--good-ink); }
+.status-warning { color: var(--warning-ink); }
+.status-critical { color: var(--critical-ink); }
+.status-unknown { color: var(--muted); }
+.meter { height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; margin: 8px 0 4px; }
+.meter > div { height: 100%; border-radius: 3px; background: var(--good); }
+.meter-warning > div { background: var(--warning); }
+.meter-critical > div { background: var(--critical); }
+
+/* filter row */
+.filters { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+.segmented { border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+  padding: 2px; }
+.window-label { color: var(--muted); font-size: 12px; margin-left: auto; }
+.btn { border: 1px solid var(--border); background: var(--surface); color: var(--ink2);
+  padding: 6px 12px; border-radius: 8px; font-size: 13px; }
+.btn:hover { color: var(--ink); text-decoration: none; }
+
+/* chart */
+.chart-card { padding: 6px 8px 8px; }
+.chart { width: 100%; }
+.hint { color: var(--muted); font-size: 11px; margin: 2px 8px 0; }
+
+/* summary table */
+table.summary { border-collapse: collapse; font-variant-numeric: tabular-nums; min-width: 420px; }
+table.summary th, table.summary td { padding: 5px 14px 5px 0; text-align: right; font-size: 13px;
+  border-bottom: 1px solid var(--grid); }
+table.summary th[scope="row"] { text-align: left; font-weight: 500; color: var(--ink2); }
+table.summary thead th { color: var(--muted); font-weight: 500; font-size: 12px; }
+.exposure { margin: 10px 0 0; font-size: 13px; }
+
+footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 18px;
+  color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+.events { display: flex; flex-direction: column; gap: 2px; }
+
+/* Dash 4 core components are themed through their CSS variables. */
+:root {
+  --Dash-Fill-Interactive-Strong: var(--accent);
+  --Dash-Fill-Inverse-Strong: var(--surface);
+  --Dash-Text-Primary: var(--ink);
+  --Dash-Text-Strong: var(--ink);
+  --Dash-Text-Weak: var(--ink2);
+  --Dash-Stroke-Strong: var(--border);
+  --Dash-Stroke-Weak: var(--border);
+  --Dash-Fill-Primary-Hover: var(--grid);
+  --Dash-Fill-Primary-Active: var(--grid);
+  --Dash-Fill-Interactive-Weak: var(--grid);
+}
+.device-select { min-width: 190px; font-size: 13px; border-radius: 8px; }
+.dash-dropdown-content, .dash-datepicker-content { background: var(--surface); color: var(--ink); }
+
+/* segmented range presets (RadioItems renders label.dash-options-list-option[.selected]) */
+.segmented { display: inline-flex; gap: 0; }
+.segmented .dash-options-list-option { margin: 0; padding: 0; cursor: pointer; }
+.segmented .dash-options-list-option-wrapper { display: none; }
+.segmented .seg-label { display: block; padding: 5px 11px; border-radius: 6px; color: var(--ink2);
+  font-size: 13px; user-select: none; }
+.segmented .dash-options-list-option:hover .seg-label { background: var(--grid); }
+.segmented .dash-options-list-option.selected .seg-label { background: var(--accent); color: #fff;
+  font-weight: 600; }
+.segmented .dash-options-list-option:focus-visible { outline: 2px solid var(--accent); }
+.filters .dash-datepicker { flex: 0 0 auto; width: auto; background: transparent; }
+.dates { width: auto; font-size: 13px; border-radius: 8px; background: var(--surface);
+  border: 1px solid var(--border); }
+.dash-datepicker-input { color: var(--ink); background: transparent; }
+.dash-datepicker-input::placeholder { color: var(--muted); }
+
+@media (max-width: 1000px) {
+  .kpis { grid-template-columns: repeat(2, 1fr); }
+  .kpi-hero { grid-column: 1 / -1; }
+  .window-label { margin-left: 0; width: 100%; }
+}

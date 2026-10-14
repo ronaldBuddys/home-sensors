@@ -66,3 +66,38 @@ events = Table(
     Column("detail", Text),
 )
 Index("ix_events_ts", events.c.ts)
+
+# Hourly rollup used for long windows (bucket >= 1 h): per-metric sum/count/min/max so means
+# can be re-aggregated exactly into any multiple of an hour. CO₂ exposure counts are kept at
+# fixed levels so "time above threshold" stats for long windows don't need the raw table.
+ROLLUP_METRICS: tuple[str, ...] = (
+    "co2",
+    "temperature",
+    "humidity",
+    "pressure",
+    "battery",
+    "radon",
+    "radiation_rate",
+)
+CO2_LEVELS: tuple[int, ...] = (800, 1000, 1200, 1400, 1500, 2000)
+
+_rollup_cols = []
+for _m in ROLLUP_METRICS:
+    _rollup_cols += [
+        Column(f"{_m}_sum", Float),
+        Column(f"{_m}_cnt", Integer),
+        Column(f"{_m}_min", Float),
+        Column(f"{_m}_max", Float),
+    ]
+_rollup_cols += [Column(f"co2_ge_{lvl}", Integer) for lvl in CO2_LEVELS]
+
+readings_hourly = Table(
+    "readings_hourly",
+    metadata,
+    Column("device_id", Integer, ForeignKey("devices.id"), nullable=False),
+    Column("hour", BigInteger, nullable=False),  # epoch seconds, multiple of 3600
+    Column("n", Integer, nullable=False),
+    *_rollup_cols,
+    PrimaryKeyConstraint("device_id", "hour", name="pk_readings_hourly"),
+    sqlite_with_rowid=False,
+)

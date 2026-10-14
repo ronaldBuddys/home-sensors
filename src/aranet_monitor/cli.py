@@ -198,6 +198,15 @@ def cmd_status(args, settings: Settings) -> int:
     return 0
 
 
+def cmd_rollup(args, settings: Settings) -> int:
+    """Rebuild the hourly rollup table from raw readings."""
+    store = _store(settings)
+    t0 = time.monotonic()
+    hours = store.rebuild_rollup()
+    print(f"rebuilt {hours} hourly rows in {time.monotonic() - t0:.1f}s")
+    return 0
+
+
 def cmd_db_init(args, settings: Settings) -> int:
     """Create the schema."""
     _store(settings)
@@ -261,6 +270,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("status", help="show data freshness and recent events")
     s.set_defaults(func=cmd_status)
+
+    s = sub.add_parser("rollup", help="rebuild the hourly rollup table")
+    s.set_defaults(func=cmd_rollup)
 
     s = sub.add_parser("db-init", help="create the database schema")
     s.set_defaults(func=cmd_db_init)

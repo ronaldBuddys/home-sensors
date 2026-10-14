@@ -13,7 +13,6 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "a2wsgi>=1.10",
     "dash>=3.0",
-    "dash-bootstrap-components>=2.0",
     "plotly>=6.0",
     "python-dotenv>=1.0",
 ]
@@ -25,7 +24,10 @@ postgres = ["psycopg[binary]>=3.2"]
 aranet = "aranet_monitor.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6", "httpx>=0.27"]
+dev = ["pytest>=8", "ruff>=0.6", "httpx2>=2.13"]
+e2e = [
+    "playwright>=1.64.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -47,11 +49,13 @@ ignore = ["D100", "D104", "D105", "D107", "D203", "D213", "D401"]
 convention = "numpy"
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["D"]
+"tests/*" = ["D", "E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not e2e'"
 markers = [
+    "e2e: browser tests (uv run --group e2e pytest -m e2e)",
     "postgres: needs a running Postgres (ARANET_TEST_PG_URL)",
     "ble: needs a real BLE adapter and device",
 ]
