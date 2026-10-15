@@ -151,3 +151,19 @@ def test_read_only_commands_do_not_create_tables(tmp_path, monkeypatch, capsys):
         with pytest.raises(RuntimeError, match="db-init"):
             cli.main(cmd)
     assert inspect(make_engine(url)).get_table_names() == []
+
+
+def test_serve_needs_both_tls_files(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("ARANET_DB_URL", f"sqlite:///{tmp_path}/x.sqlite")
+    monkeypatch.setenv("ARANET_WEB_TLS_CERT", "/nonexistent/web.crt")
+    assert cli.main(["serve"]) == 2
+    assert "ARANET_WEB_TLS_KEY" in capsys.readouterr().err
+
+
+def test_grant_read_checks_backend_and_role(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("ARANET_DB_URL", f"sqlite:///{tmp_path}/x.sqlite")
+    assert cli.main(["grant-read", "dashboard_ro"]) == 2
+    assert "Postgres" in capsys.readouterr().err
+    monkeypatch.setenv("ARANET_DB_URL", "postgresql+psycopg://u:p@localhost:1/db")
+    assert cli.main(["grant-read", 'x"; DROP TABLE readings; --']) == 2
+    assert "invalid role" in capsys.readouterr().err

@@ -150,3 +150,34 @@ def test_csv_filename_is_ascii(tmp_path):
     r = c.get(f"/api/v1/devices/{dev}/export.csv?range=24h")
     assert r.status_code == 200
     assert 'filename="K_che__' in r.headers["content-disposition"]
+
+
+def test_failed_logins_are_throttled(tmp_path):
+    import base64
+
+    url = f"sqlite:///{tmp_path}/throttle.sqlite"
+    init_db(make_engine(url))
+    c = TestClient(create_app(Settings(db_url=url, web_password="s3cret"), with_dash=False))
+    good = {"Authorization": "Basic " + base64.b64encode(b"aranet:s3cret").decode()}
+    bad = {"Authorization": "Basic " + base64.b64encode(b"aranet:guess").decode()}
+    for _ in range(10):  # the browser's first, header-less request never counts
+        assert c.get("/api/v1/devices").status_code == 401
+    assert c.get("/api/v1/devices", headers=good).status_code == 200
+    for _ in range(5):
+        assert c.get("/api/v1/devices", headers=bad).status_code == 401
+    assert c.get("/api/v1/devices", headers=good).status_code == 429  # locked, even if right
+    assert c.get("/healthz").status_code == 200
+
+
+def test_web_uses_its_own_db_login():
+    s = Settings(
+        db_url="postgresql+psycopg://app:app-pw@db:5432/sensors?sslmode=verify-full",
+        web_db_user="dashboard_ro",
+        web_db_password="ro-pw",
+    )
+    assert (
+        s.web_db_url
+        == "postgresql+psycopg://dashboard_ro:ro-pw@db:5432/sensors?sslmode=verify-full"
+    )
+    assert Settings(db_url="sqlite:///x.sqlite").web_db_url == "sqlite:///x.sqlite"
+    assert "ro-pw" not in repr(s)

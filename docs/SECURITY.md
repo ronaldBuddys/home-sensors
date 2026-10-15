@@ -8,6 +8,8 @@ The app runs on a home network. The data, indoor CO₂/temperature/humidity, is 
 
 - **Localhost by default.** The web server binds to `127.0.0.1`.
 - **Optional authentication.** When `ARANET_WEB_PASSWORD` is set, HTTP Basic auth covers every route, including the Dash UI. The comparison is constant-time (`secrets.compare_digest`), and `/healthz` stays open for health checks. Neither the web password nor the DB URL (which carries the DB password) appears in the settings `repr()`, and DB URLs are logged with the password masked.
+- **Login hardening.** Optional HTTPS (`ARANET_WEB_TLS_CERT`/`KEY`, private CA via `scripts/make-cert.sh`); 5 failed logins per address lock it out for 10 minutes; plain-HTTP LAN binds log a warning.
+- **Read-only dashboard DB access.** The web app can use its own login (`ARANET_WEB_DB_USER`/`PASSWORD`) for a role granted only SELECT (`aranet grant-read`), and opens Postgres transactions read-only.
 - **No unauthenticated LAN exposure by accident.** `aranet serve` refuses a non-loopback bind without `ARANET_WEB_PASSWORD` unless `--allow-no-auth` is given.
 - **Security headers.** Every response (including 401s) carries a Content-Security-Policy (everything from `'self'`, `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`. Dash needs `'unsafe-inline'`/`'unsafe-eval'` scripts.
 - **Bounded queries.** `start`/`end` must be epoch seconds in `[0, 2^32]` and a window may span at most ~2 years (CSV exports of longer histories are paged); the dashboard tolerates malformed client state instead of erroring. Basic auth also rejects unauthenticated websocket connections.
@@ -38,7 +40,7 @@ The app runs on a home network. The data, indoor CO₂/temperature/humidity, is 
 
 ## If exposing the dashboard beyond localhost
 
-- Set `ARANET_WEB_PASSWORD`. Prefer a reverse proxy with TLS (Caddy gets this almost for free), because Basic auth over plain HTTP sends the password on every request.
+- Set a long random `ARANET_WEB_PASSWORD` **and** `ARANET_WEB_TLS_CERT`/`ARANET_WEB_TLS_KEY` (DEPLOYMENT §7): Basic auth over plain HTTP sends the password on every request.
 - Don't port-forward this to the internet. Use a VPN (Tailscale or WireGuard) instead.
 - Dash runs with `debug=False`, which is the default here. Never enable Dash debug mode on a network interface.
 - The Swagger UI at `/api/docs` is off by default because it loads JavaScript from a CDN; enable it with `ARANET_API_DOCS=1` (it is exempt from the CSP).

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import secrets
+import time
 
 from a2wsgi import WSGIMiddleware
 from fastapi import FastAPI
@@ -22,9 +23,31 @@ class BasicAuthMiddleware:
     ``/healthz`` stays open for health checks.
     """
 
+    MAX_FAILURES = 5  # per client address ...
+    WINDOW_S = 600  # ... within this window, then 429 until the window has passed
+    MAX_TRACKED = 1024  # bound memory when many addresses fail
+
     def __init__(self, app, user: str, password: str):
         self.app = app
         self._expected = f"{user}:{password}".encode()
+        self._failures: dict[str, tuple[int, float]] = {}  # client -> (count, window start)
+
+    def _locked(self, client: str, now: float) -> bool:
+        count, since = self._failures.get(client, (0, now))
+        if now - since > self.WINDOW_S:
+            self._failures.pop(client, None)
+            return False
+        return count >= self.MAX_FAILURES
+
+    def _record_failure(self, client: str, now: float) -> None:
+        if len(self._failures) >= self.MAX_TRACKED:
+            self._failures = {
+                c: v for c, v in self._failures.items() if now - v[1] <= self.WINDOW_S
+            }
+        count, since = self._failures.get(client, (0, now))
+        if now - since > self.WINDOW_S:
+            count, since = 0, now
+        self._failures[client] = (count + 1, since)
 
     def _ok(self, header: bytes | None) -> bool:
         if not header or header[:6].lower() != b"basic ":
@@ -39,23 +62,35 @@ class BasicAuthMiddleware:
         """Reject unauthenticated HTTP (401) and websocket (close 1008) connections."""
         if scope["type"] == "lifespan" or scope.get("path") == "/healthz":
             return await self.app(scope, receive, send)
+        client = (scope.get("client") or ("?",))[0]
+        now = time.monotonic()
+        if self._locked(client, now):
+            return await self._reject(scope, send, 429, b"too many failed logins; try later")
         headers = dict(scope.get("headers") or [])
-        if self._ok(headers.get(b"authorization")):
+        header = headers.get(b"authorization")
+        if self._ok(header):
+            self._failures.pop(client, None)
             return await self.app(scope, receive, send)
+        if header:  # a wrong password, not just the browser's first unauthenticated request
+            self._record_failure(client, now)
+        return await self._reject(scope, send, 401, b"authentication required")
+
+    @staticmethod
+    async def _reject(scope, send, status: int, body: bytes) -> None:
         if scope["type"] != "http":
             await send({"type": "websocket.close", "code": 1008})
-            return None
+            return
         await send(
             {
                 "type": "http.response.start",
-                "status": 401,
+                "status": status,
                 "headers": [
                     (b"www-authenticate", b'Basic realm="Aranet Monitor", charset="UTF-8"'),
                     (b"content-type", b"text/plain"),
                 ],
             }
         )
-        await send({"type": "http.response.body", "body": b"authentication required"})
+        await send({"type": "http.response.body", "body": body})
 
 
 # Dash needs inline/eval script (renderer bootstrap, Plotly); everything is served locally.
@@ -106,7 +141,7 @@ def create_app(settings: Settings | None = None, *, with_dash: bool = True) -> F
         Mount the Dash UI at ``/`` (disable for API-only tests).
     """
     settings = settings or Settings.from_env()
-    engine = make_engine(settings.db_url, schema=settings.db_schema)
+    engine = make_engine(settings.web_db_url, schema=settings.db_schema, read_only=True)
     check_schema(engine)  # read-only: no DDL, so a read-only DB role is enough
     queries = Queries(engine)
 

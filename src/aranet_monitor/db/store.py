@@ -19,11 +19,13 @@ from aranet_monitor.models import METRICS, DeviceInfo, Reading
 DEFAULT_INTERVAL_S = 60
 
 
-def make_engine(db_url: str, *, schema: str | None = None) -> Engine:
+def make_engine(db_url: str, *, schema: str | None = None, read_only: bool = False) -> Engine:
     """Create an engine; SQLite gets WAL + busy timeout so collector and web can share it.
 
     ``schema`` (Postgres only) places every table in that schema instead of the default one.
-    The schema must already exist and be writable by the connecting role.
+    The schema must already exist and be writable by the connecting role. ``read_only``
+    (Postgres only) makes every transaction read-only -- a guard against bugs; the real
+    boundary is a role with only SELECT (``aranet grant-read``).
     """
     if db_url.startswith("sqlite"):
         ensure_sqlite_dir(db_url)
@@ -41,7 +43,8 @@ def make_engine(db_url: str, *, schema: str | None = None) -> Engine:
             cur.close()
 
         return engine
-    engine = create_engine(db_url, pool_pre_ping=True)
+    connect_args = {"options": "-c default_transaction_read_only=on"} if read_only else {}
+    engine = create_engine(db_url, pool_pre_ping=True, connect_args=connect_args)
     if schema:
         # Every unqualified table (all of ours) is rendered as "<schema>.<table>".
         engine = engine.execution_options(schema_translate_map={None: schema})

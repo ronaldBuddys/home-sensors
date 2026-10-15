@@ -174,14 +174,32 @@ def cmd_serve(args, settings: Settings) -> int:
             file=sys.stderr,
         )
         return 2
+    if bool(settings.web_tls_cert) != bool(settings.web_tls_key):
+        print("set both ARANET_WEB_TLS_CERT and ARANET_WEB_TLS_KEY (or neither)", file=sys.stderr)
+        return 2
+    tls = bool(settings.web_tls_cert)
+    if not tls and not _is_loopback(host):
+        log.warning(
+            "serving on %s over plain HTTP: the password crosses the network unencrypted "
+            "(set ARANET_WEB_TLS_CERT/ARANET_WEB_TLS_KEY, see docs/DEPLOYMENT.md)",
+            host,
+        )
     log.info(
-        "dashboard on http://%s:%s/  (db %s%s)",
+        "dashboard on %s://%s:%s/  (db %s%s)",
+        "https" if tls else "http",
         host,
         port,
-        _safe_url(settings.db_url),
+        _safe_url(settings.web_db_url),
         f", schema {settings.db_schema}" if settings.db_schema else "",
     )
-    uvicorn.run(create_app(settings), host=host, port=port, log_level="warning")
+    uvicorn.run(
+        create_app(settings),
+        host=host,
+        port=port,
+        log_level="warning",
+        ssl_certfile=settings.web_tls_cert,
+        ssl_keyfile=settings.web_tls_key,
+    )
     return 0
 
 
@@ -285,6 +303,33 @@ def cmd_rollup(args, settings: Settings) -> int:
     return 0
 
 
+def cmd_grant_read(args, settings: Settings) -> int:
+    """Give an existing Postgres role read-only access to the app's tables (now and future)."""
+    import re
+
+    from sqlalchemy import text
+
+    engine = make_engine(settings.db_url)  # as the app role, which owns the tables
+    if engine.dialect.name != "postgresql":
+        print("grant-read needs a Postgres database", file=sys.stderr)
+        return 2
+    if not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", args.role):
+        print(f"invalid role name {args.role!r} (lowercase letters, digits, _)", file=sys.stderr)
+        return 2
+    quote = engine.dialect.identifier_preparer.quote  # identifiers can't be bound parameters
+    schema, role = quote(settings.db_schema or "public"), quote(args.role)
+    with engine.begin() as conn:
+        for stmt in (
+            f"GRANT USAGE ON SCHEMA {schema} TO {role}",
+            f"GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO {role}",
+            # tables the app role creates later (new features) become readable too
+            f"ALTER DEFAULT PRIVILEGES IN SCHEMA {schema} GRANT SELECT ON TABLES TO {role}",
+        ):
+            conn.execute(text(stmt))
+    print(f"granted read-only access on schema {schema} to {role}")
+    return 0
+
+
 def cmd_db_init(args, settings: Settings) -> int:
     """Create the schema."""
     _store(settings)
@@ -378,6 +423,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("rollup", help="rebuild the hourly rollup table")
     s.set_defaults(func=cmd_rollup)
+
+    s = sub.add_parser("grant-read", help="give a Postgres role read-only access (dashboard)")
+    s.add_argument("role", help="existing role, created by a DB admin")
+    s.set_defaults(func=cmd_grant_read)
 
     s = sub.add_parser("db-init", help="create the database schema")
     s.set_defaults(func=cmd_db_init)

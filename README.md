@@ -91,6 +91,7 @@ ARANET_DB_URL=sqlite:///data/sim.sqlite uv run aranet serve
 | `aranet simulate` / `aranet seed --days N` | Synthetic data (use a separate DB) |
 | `aranet copy-db [--source URL] [--target URL]` | Copy all data between databases (idempotent; e.g. SQLite to Postgres) |
 | `aranet rollup` | Rebuild the hourly rollup table |
+| `aranet grant-read ROLE` | Give a Postgres role read-only access, e.g. for the dashboard |
 | `aranet db-init` | Create the tables (`serve`, `status` and `export` never run DDL) |
 
 Configuration is via environment variables or a `.env` file; see [`.env.example`](.env.example).

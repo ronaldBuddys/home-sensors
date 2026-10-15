@@ -108,16 +108,58 @@ ARANET_DB_SCHEMA=aranet
 
 Use `ARANET_DB_URL=postgresql+psycopg://…` instead of the `POSTGRES_*` parts if you prefer a single URL; it takes precedence.
 
-**TLS.** If the server is not on the same machine, enable TLS on it and set `POSTGRES_SSLMODE=verify-full` (plus `POSTGRES_SSLROOTCERT=/path/to/ca.pem` for a private CA), or `require` if you can't verify the certificate. Without it libpq uses `prefer`: encryption is opportunistic and the server is not authenticated. With `ARANET_DB_URL`, append `?sslmode=verify-full&sslrootcert=…` instead.
+**TLS.** If the server is not on the same machine, enable TLS on it. Without TLS, libpq falls back to `prefer`: the connection is encrypted only if the server offers it, and the server is never authenticated. A self-run server usually has `ssl = off`. To turn it on:
 
-**Who creates tables.** Only writers run DDL: `collect`, `db-init`, `seed`/`simulate`, `rollup`, `backfill` and the `copy-db` target. `serve`, `status` and `export` only read and fail with "run `aranet db-init`" if the tables are missing. So the dashboard can optionally use its own read-only role (set its `POSTGRES_USER`/`POSTGRES_PASSWORD` in the web service's environment):
+1. Issue a server certificate from the project's private CA. List every name or IP that clients use for the server:
 
-```sql
-CREATE ROLE dashboard_ro LOGIN PASSWORD '…';
-GRANT USAGE ON SCHEMA aranet TO dashboard_ro;
-GRANT SELECT ON ALL TABLES IN SCHEMA aranet TO dashboard_ro;
-ALTER DEFAULT PRIVILEGES FOR ROLE app_role IN SCHEMA aranet GRANT SELECT ON TABLES TO dashboard_ro;
-```
+   ```bash
+   ./scripts/make-cert.sh postgres <server IP> [<server hostname>]
+   ```
+
+2. Copy `data/tls/postgres.crt` and `data/tls/postgres.key` into the server's data directory. The key must be owned by the `postgres` user with mode `600`. If the server runs in Docker, mount both files into the container.
+
+3. In `postgresql.conf` (or as `-c` options on the container), set:
+
+   ```
+   ssl = on
+   ssl_cert_file = 'postgres.crt'
+   ssl_key_file = 'postgres.key'
+   ```
+
+   Then reload the server: `SELECT pg_reload_conf();` as an admin.
+
+4. Optionally, make the server refuse unencrypted logins: in `pg_hba.conf`, change this app's `host` lines to `hostssl`.
+
+5. In `.env`, set:
+
+   ```
+   POSTGRES_SSLMODE=verify-full
+   POSTGRES_SSLROOTCERT=data/tls/ca.crt
+   ```
+
+6. Check the connection with `uv run aranet status`, then restart both services.
+
+If you use `ARANET_DB_URL` instead of the `POSTGRES_*` parts, append `?sslmode=verify-full&sslrootcert=data/tls/ca.crt` to the URL.
+
+**Who creates tables.** Only writers run DDL: `collect`, `db-init`, `seed`/`simulate`, `rollup`, `backfill` and the `copy-db` target. `serve`, `status` and `export` only read and fail with "run `aranet db-init`" if the tables are missing. Because the dashboard never writes, it can log in as a **read-only role**. A leaked dashboard password then exposes data, but can't change or delete it. Setup:
+
+1. As a DB admin, create the role (only an admin can create roles):
+
+   ```sql
+   CREATE ROLE dashboard_ro LOGIN PASSWORD '<openssl rand -base64 24>';
+   ```
+
+2. As the app role, which owns the tables, grant read access. This also covers tables added later:
+
+   ```bash
+   uv run aranet grant-read dashboard_ro
+   ```
+
+3. In `.env`, add `ARANET_WEB_DB_USER=dashboard_ro` and `ARANET_WEB_DB_PASSWORD=…`. The web app connects with these. The host, database, schema and TLS settings stay shared with the collector.
+
+4. Restart the web service with `systemctl --user restart aranet-web`.
+
+The web app also opens every Postgres transaction read-only, which guards against bugs even without the separate role.
 
 ### Create the tables and move the SQLite data
 
@@ -169,7 +211,30 @@ By default the web app binds to `127.0.0.1`. To reach it from other machines:
 
 ```bash
 ARANET_WEB_HOST=0.0.0.0
-ARANET_WEB_PASSWORD=<something long>   # turns on HTTP Basic auth for every page and API route
+ARANET_WEB_PASSWORD=<openssl rand -base64 24>   # HTTP Basic auth for every page and API route
+ARANET_WEB_TLS_CERT=data/tls/web.crt            # HTTPS, so the password isn't sent in clear
+ARANET_WEB_TLS_KEY=data/tls/web.key
 ```
 
-`aranet serve` refuses a non-loopback host without a password (override with `--allow-no-auth`). Basic auth sends credentials on every request in plain HTTP, so anyone who can sniff the LAN/Wi-Fi can read them: use a long random password, and prefer a TLS reverse proxy (Caddy or nginx) or a VPN such as Tailscale. See [SECURITY.md](SECURITY.md).
+- **Password required.** `aranet serve` refuses a non-loopback host without a password. Override this with `--allow-no-auth`.
+- **Lockout.** After 5 wrong passwords from the same address, that address gets `429` for 10 minutes.
+- **Plain-HTTP warning.** Without TLS, `serve` logs a warning, because Basic auth then sends the password readably to anyone sniffing the LAN or Wi-Fi.
+
+To set up HTTPS:
+
+1. Issue a certificate for every name or IP you type into the browser:
+
+   ```bash
+   ./scripts/make-cert.sh web <LAN IP> <hostname>.local
+   ```
+
+2. Set the two `ARANET_WEB_TLS_*` variables shown above.
+
+3. Restart the web service with `systemctl --user restart aranet-web`, and open `https://<LAN IP>:8050/`.
+
+4. To get rid of the browser warning, install `data/tls/ca.crt` as a trusted CA on each device:
+   - **iOS:** open the file, install the profile, then turn on Settings → General → About → Certificate Trust Settings.
+   - **Android:** Settings → Security → Install certificate → CA certificate.
+   - **Desktop:** import the CA into the browser or OS store.
+
+A VPN such as Tailscale is an alternative if you want the dashboard reachable away from home. See [SECURITY.md](SECURITY.md).

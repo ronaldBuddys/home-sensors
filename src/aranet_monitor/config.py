@@ -86,6 +86,21 @@ class Settings:
     web_user: str = "aranet"
     web_password: str | None = field(default=None, repr=False)  # set => HTTP Basic auth on
     api_docs: bool = False  # serve Swagger UI at /api/docs (loads JS from a CDN)
+    web_tls_cert: str | None = None  # PEM certificate (chain) => the web app serves HTTPS
+    web_tls_key: str | None = None
+    # Optional separate (read-only) DB login for the web app; same host/db/schema/TLS options.
+    web_db_user: str | None = None
+    web_db_password: str | None = field(default=None, repr=False)
+
+    @property
+    def web_db_url(self) -> str:
+        """DB URL for the web app: ``db_url`` with the web login swapped in, if one is set."""
+        if not self.web_db_user:
+            return self.db_url
+        from sqlalchemy.engine import make_url
+
+        url = make_url(self.db_url).set(username=self.web_db_user, password=self.web_db_password)
+        return url.render_as_string(hide_password=False)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -111,6 +126,10 @@ class Settings:
             web_user=env.get("ARANET_WEB_USER", cls.web_user),
             web_password=env.get("ARANET_WEB_PASSWORD") or None,
             api_docs=env.get("ARANET_API_DOCS", "0").lower() in ("1", "true", "yes"),
+            web_tls_cert=env.get("ARANET_WEB_TLS_CERT") or None,
+            web_tls_key=env.get("ARANET_WEB_TLS_KEY") or None,
+            web_db_user=env.get("ARANET_WEB_DB_USER") or None,
+            web_db_password=env.get("ARANET_WEB_DB_PASSWORD") or None,
         )
 
 
