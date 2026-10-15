@@ -188,22 +188,74 @@ To catch readings logged between the copy and the restart, run `copy-db` once mo
 
 ## 6. Raspberry Pi (collector next to the sensor)
 
+These steps were written for a Pi 3 (1 GB, built-in Bluetooth) running **Raspberry Pi OS Lite 64-bit**. The Pi runs the collector, and optionally the dashboard; Postgres stays on its server. Every dependency has an ARM64 wheel, so nothing heavy compiles on the Pi.
+
+**1. Flash and boot.** Use Raspberry Pi Imager:
+- choose *Raspberry Pi OS Lite (64-bit)*;
+- set a hostname, a user, SSH with your public key, and Wi-Fi if needed;
+- prefer Ethernet: on a Pi 3, Wi-Fi and Bluetooth share one radio chip.
+
+**2. Base setup over SSH:**
+
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-git clone <repo> && cd aranet4-monitor
-uv sync --frozen --no-dev
-echo 'ARANET_DB_URL=postgresql+psycopg://aranet:...@db-host:5432/aranet' > .env
-uv run aranet scan
-# pair as in section 3, then:
-./deploy/install-user-services.sh
-systemctl --user disable --now aranet-web      # optional: run the web app elsewhere
-loginctl enable-linger "$USER"
+sudo apt update && sudo apt full-upgrade -y
+sudo apt install -y git bluez
+sudo usermod -aG bluetooth "$USER"           # BlueZ D-Bus access for headless logins; log out and in
+timedatectl                                  # "System clock synchronized: yes" (the Pi has no RTC)
+curl -LsSf https://astral.sh/uv/install.sh | sh && exec "$SHELL" -l
 ```
+
+**3. Get the code.** For a private repo, use a read-only deploy key:
+
+```bash
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/home-sensors -C "pi deploy key"
+cat ~/.ssh/home-sensors.pub    # GitHub: repo > Settings > Deploy keys > Add (read-only)
+printf 'Host github.com\n  IdentityFile ~/.ssh/home-sensors\n' >> ~/.ssh/config
+git clone git@github.com:<user>/<repo>.git ~/home-sensors && cd ~/home-sensors
+uv sync --frozen --no-dev                    # downloads Python 3.12 + wheels; a few minutes
+```
+
+**4. Configure.** Copy `.env` from the current host over SSH. It holds secrets, so never commit or e-mail it:
+
+```bash
+# on the current host:
+scp .env pi@<pi>:~/home-sensors/.env
+# and, for HTTPS and Postgres TLS, the CA plus a web certificate for the Pi:
+./scripts/make-cert.sh web-pi <pi IP> <pi hostname>.local
+ssh pi@<pi> 'mkdir -p ~/home-sensors/data/tls && chmod 700 ~/home-sensors/data'
+scp data/tls/ca.crt data/tls/web-pi.crt data/tls/web-pi.key pi@<pi>:~/home-sensors/data/tls/
+```
+
+On the Pi, set `ARANET_WEB_TLS_CERT=data/tls/web-pi.crt` and `ARANET_WEB_TLS_KEY=data/tls/web-pi.key` in `.env`. Leave the CA key (`ca.key`) on the host that issues certificates.
+
+**5. Check the radio and pair** (the bond is per host, so the Pi needs its own):
+
+```bash
+uv run aranet scan                          # the sensor and its readings should be listed
+bluetoothctl                                # pair + trust as in section 3 (PIN on the display)
+uv run aranet backfill AA:BB:CC:DD:EE:FF --last 10
+```
+
+If pairing fails while the old host is still bonded, stop that host's collector first. If it still fails, run `bluetoothctl remove AA:BB:CC:DD:EE:FF` on the old host (unverified whether the Aranet4 keeps more than one bond).
+
+**6. Run it as services, and retire the old collector:**
+
+```bash
+./deploy/install-user-services.sh
+loginctl enable-linger "$USER"              # start at boot without logging in
+systemctl --user disable --now aranet-web   # optional: keep the dashboard elsewhere
+journalctl --user -u aranet-collector -f    # "device allow-list", then readings every minute
+```
+
+On the old host, run `systemctl --user disable --now aranet-collector`. Two collectors wouldn't duplicate rows, but each would open its own GATT sessions, which costs sensor battery.
 
 Tips:
 
-- Keep the Pi within a few metres of the sensor. At about −85 dBm (the signal at the desk test) adverts still arrive, but GATT connections become less reliable.
-- If the Pi's onboard Wi-Fi and Bluetooth share an antenna, a USB BLE dongle can be more reliable.
+- **Distance.** Keep the Pi within a few metres of the sensor. At about −85 dBm (the signal at the desk test) adverts still arrive, but GATT connections become less reliable.
+- **Radio.** If the onboard Bluetooth is flaky, typically because Wi-Fi shares the chip, a USB BLE dongle helps; the TP-Link UB5A works.
+- **Clock.** Readings are timestamped with the Pi's clock. After a power cut the clock can be stale until NTP syncs, normally within seconds of the network coming up. Check `timedatectl` if timestamps look wrong.
+- **Power and SD card.** Use a proper 2.5 A supply; under-voltage causes Bluetooth dropouts. Writes to the SD card are only the journal, because the database is remote.
+- **Sandboxing.** If the units fail with namespace errors, remove the four `PrivateUsers`/`Protect*`/`PrivateTmp` lines from the unit templates (section 4) and re-run the installer.
 
 ## 7. Exposing the dashboard on your LAN
 
