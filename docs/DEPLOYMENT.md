@@ -188,6 +188,54 @@ To catch readings logged between the copy and the restart, run `copy-db` once mo
 
 ## 6. Raspberry Pi (collector next to the sensor)
 
+### Quick proof of concept (Pi already running, repo already cloned)
+
+The goal is to show the Pi can hear the sensor and write to Postgres, without pairing, certificates or services. Run each block on the machine named in its comment.
+
+```bash
+# on the Pi: check the basics
+uname -m                      # want aarch64 (64-bit OS); armv7l = 32-bit, see the note below
+groups                        # should include "bluetooth" (if not: sudo usermod -aG bluetooth "$USER", log in again)
+systemctl is-active bluetooth # "active": BlueZ ships with Raspberry Pi OS
+```
+
+```bash
+# on the Pi: get the code and its dependencies
+cd ~/home-sensors
+git pull origin main
+command -v uv || { curl -LsSf https://astral.sh/uv/install.sh | sh; exec "$SHELL" -l; }
+uv sync --frozen --no-dev     # first run downloads Python 3.12 and the wheels: a few minutes
+```
+
+```bash
+# on the current host: copy the settings (they contain passwords, so only over SSH)
+scp .env <pi>:~/home-sensors/.env
+ssh <pi> chmod 600 '~/home-sensors/.env'
+```
+
+```bash
+# on the Pi: can it hear the sensor, and reach the database?
+cd ~/home-sensors
+uv run aranet scan            # lists the sensor and its readings
+uv run aranet status          # JSON with "ok": true = Postgres reachable (read-only)
+```
+
+```bash
+# trial run: hand recording over to the Pi for a few minutes
+# on the current host:
+systemctl --user stop aranet-collector
+# on the Pi (no history download: the Pi isn't paired yet):
+ARANET_BACKFILL_ON_START=0 uv run aranet collect     # a reading line every ~minute; Ctrl-C to stop
+# back on the current host (it is paired, so it fills the gap from the sensor's memory):
+systemctl --user start aranet-collector
+```
+
+If all that works, follow the full steps below to make the Pi permanent: pair it, install the services, and retire the old collector.
+
+**32-bit OS (`armv7l`).** Several dependencies, including `psycopg[binary]`, have no 32-bit ARM wheels on PyPI, so they would have to compile. Re-flashing with the 64-bit Lite image is the easier path.
+
+### Full setup
+
 These steps were written for a Pi 3 (1 GB, built-in Bluetooth) running **Raspberry Pi OS Lite 64-bit**. The Pi runs the collector, and optionally the dashboard; Postgres stays on its server. Every dependency has an ARM64 wheel, so nothing heavy compiles on the Pi.
 
 **1. Flash and boot.** Use Raspberry Pi Imager:
