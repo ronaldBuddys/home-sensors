@@ -10,9 +10,8 @@ def test_generate_accepts_float_bounds():
     assert len(rows) == 11 and rows[0].ts == 0
 
 
-def test_seed_export_status(tmp_path, monkeypatch, capsys):
-    url = f"sqlite:///{tmp_path}/cli.sqlite"
-    monkeypatch.setenv("ARANET_DB_URL", url)
+def test_seed_export_status(db, monkeypatch, capsys):
+    db.use_env(monkeypatch)
     assert cli.main(["seed", "--days", "0.5"]) == 0
     assert "inserted 721 rows" in capsys.readouterr().out
     assert cli.main(["export"]) == 0
@@ -25,34 +24,36 @@ def test_seed_export_status(tmp_path, monkeypatch, capsys):
     assert "rebuilt 13 hourly rows" in capsys.readouterr().out
 
 
-def test_db_init_hides_password(monkeypatch, capsys, tmp_path):
-    monkeypatch.setenv("ARANET_DB_URL", f"sqlite:///{tmp_path}/x.sqlite")
+def test_db_init_hides_password(monkeypatch, capsys, db):
+    db.use_env(monkeypatch)
     assert cli.main(["db-init"]) == 0
     assert cli._safe_url("postgresql+psycopg://u:secret@h/db") == "postgresql+psycopg://u:***@h/db"
 
 
-def test_copy_db_is_idempotent(tmp_path, capsys):
-    a, b = f"sqlite:///{tmp_path}/a.sqlite", f"sqlite:///{tmp_path}/b.sqlite"
+def test_copy_db_is_idempotent(tmp_path, db, capsys):
+    # --source takes a URL only (no schema), so the source is a SQLite file; the target is
+    # the engine under test (a SQLite file, or a fresh Postgres schema).
+    a = f"sqlite:///{tmp_path}/a.sqlite"
     assert cli.main(["seed", "--db", a, "--days", "1"]) == 0
     capsys.readouterr()
-    assert cli.main(["copy-db", "--source", a, "--target", b]) == 0
+    assert cli.main(["copy-db", "--source", a, *db.target_args()]) == 0
     assert "1441 new reading(s)" in capsys.readouterr().out
-    assert cli.main(["copy-db", "--source", a, "--target", b]) == 0
+    assert cli.main(["copy-db", "--source", a, *db.target_args()]) == 0
     assert "0 new reading(s)" in capsys.readouterr().out
     from aranet_monitor.db.queries import Queries
     from aranet_monitor.db.store import make_engine
 
-    qa, qb = Queries(make_engine(a)), Queries(make_engine(b))
+    qa, qb = Queries(make_engine(a)), Queries(db.engine())
     sa = qa.stats(1, 0, 2**40)
     sb = qb.stats(1, 0, 2**40)
     assert sa["n"] == sb["n"] and sa["co2_mean"] == sb["co2_mean"]
 
 
-def test_copy_db_keeps_rows_after_interval_change(tmp_path):
+def test_copy_db_keeps_rows_after_interval_change(tmp_path, db):
     from aranet_monitor.db.store import Store, copy_db, init_db, make_engine
     from aranet_monitor.models import DeviceInfo, Reading
 
-    a, b = f"sqlite:///{tmp_path}/a.sqlite", f"sqlite:///{tmp_path}/b.sqlite"
+    a = f"sqlite:///{tmp_path}/a.sqlite"
     eng = make_engine(a)
     init_db(eng)
     st = Store(eng)
@@ -61,17 +62,23 @@ def test_copy_db_keeps_rows_after_interval_change(tmp_path):
         dev, [Reading("AA:BB:CC:00:11:22", t * 60, "adv", co2=500) for t in range(1440)]
     )
     st.upsert_device(DeviceInfo("AA:BB:CC:00:11:22", interval_s=600))  # interval changed later
-    assert copy_db(a, b)["readings"] == 1440
+    assert copy_db(a, db.url, target_schema=db.schema)["readings"] == 1440
 
 
-def test_copy_db_target_defaults_to_configured_db(tmp_path, monkeypatch, capsys):
-    a, b = f"sqlite:///{tmp_path}/a.sqlite", f"sqlite:///{tmp_path}/b.sqlite"
+def test_copy_db_target_defaults_to_configured_db(tmp_path, db, monkeypatch, capsys):
+    a = f"sqlite:///{tmp_path}/a.sqlite"
     assert cli.main(["seed", "--db", a, "--days", "0.1"]) == 0
-    monkeypatch.setenv("ARANET_DB_URL", b)
+    db.use_env(monkeypatch)
     capsys.readouterr()
     assert cli.main(["copy-db", "--source", a]) == 0
     assert "new reading(s)" in capsys.readouterr().out
     assert cli.main(["copy-db"]) == 2
+
+
+def test_copy_db_rejects_same_source_and_target(tmp_path, monkeypatch):
+    # SQLite-only: --source cannot carry a schema, so on Postgres it is never "the same".
+    b = f"sqlite:///{tmp_path}/b.sqlite"
+    monkeypatch.setenv("ARANET_DB_URL", b)
     assert cli.main(["copy-db", "--source", b]) == 2  # same as configured target
 
 
@@ -117,8 +124,8 @@ def test_env_example_does_not_override_postgres_parts():
     assert active == []
 
 
-def test_serve_refuses_lan_bind_without_password(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("ARANET_DB_URL", f"sqlite:///{tmp_path}/x.sqlite")
+def test_serve_refuses_lan_bind_without_password(monkeypatch, db, capsys):
+    db.use_env(monkeypatch)
     assert cli.main(["serve", "--host", "0.0.0.0"]) == 2
     assert "refusing" in capsys.readouterr().err
     assert cli._is_loopback("127.0.0.1") and cli._is_loopback("::1")
@@ -139,22 +146,19 @@ def test_postgres_sslmode_from_env(monkeypatch):
     assert q == {"sslmode": "verify-full", "sslrootcert": "/etc/ssl/home-ca.pem"}
 
 
-def test_read_only_commands_do_not_create_tables(tmp_path, monkeypatch, capsys):
+def test_read_only_commands_do_not_create_tables(db, monkeypatch, capsys):
     import pytest
     from sqlalchemy import inspect
 
-    from aranet_monitor.db.store import make_engine
-
-    url = f"sqlite:///{tmp_path}/ro.sqlite"
-    monkeypatch.setenv("ARANET_DB_URL", url)
+    db.use_env(monkeypatch)
     for cmd in (["status"], ["export"]):
         with pytest.raises(RuntimeError, match="db-init"):
             cli.main(cmd)
-    assert inspect(make_engine(url)).get_table_names() == []
+    assert inspect(db.engine()).get_table_names(schema=db.schema) == []
 
 
-def test_serve_needs_both_tls_files(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("ARANET_DB_URL", f"sqlite:///{tmp_path}/x.sqlite")
+def test_serve_needs_both_tls_files(monkeypatch, db, capsys):
+    db.use_env(monkeypatch)
     monkeypatch.setenv("ARANET_WEB_TLS_CERT", "/nonexistent/web.crt")
     assert cli.main(["serve"]) == 2
     assert "ARANET_WEB_TLS_KEY" in capsys.readouterr().err

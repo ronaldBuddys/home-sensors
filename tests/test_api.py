@@ -5,15 +5,14 @@ from fastapi.testclient import TestClient
 
 from aranet_monitor.api.app import create_app
 from aranet_monitor.config import Settings
-from aranet_monitor.db.store import Store, init_db, make_engine
+from aranet_monitor.db.store import Store, init_db
 from aranet_monitor.models import DeviceInfo
 from aranet_monitor.sim.simulator import Aranet4Simulator
 
 
 @pytest.fixture(scope="module")
-def client(tmp_path_factory):
-    url = f"sqlite:///{tmp_path_factory.mktemp('api')}/api.sqlite"
-    eng = make_engine(url)
+def client(module_db):
+    eng = module_db.engine()
     init_db(eng)
     st = Store(eng)
     sim = Aranet4Simulator()
@@ -21,7 +20,7 @@ def client(tmp_path_factory):
     now = int(time.time())
     st.bulk_insert_raw(dev, sim.generate(now - 10 * 86400, now - 30))
     st.log_event("start", "test", dev)
-    return TestClient(create_app(Settings(db_url=url)))
+    return TestClient(create_app(module_db.settings()))
 
 
 def test_devices_and_latest(client):
@@ -72,12 +71,11 @@ def test_dash_is_mounted(client):
     assert client.get("/healthz").json() == {"ok": True}
 
 
-def test_basic_auth(tmp_path):
+def test_basic_auth(db):
     import base64
 
-    url = f"sqlite:///{tmp_path}/auth.sqlite"
-    init_db(make_engine(url))
-    c = TestClient(create_app(Settings(db_url=url, web_password="s3cret")))
+    init_db(db.engine())
+    c = TestClient(create_app(db.settings(web_password="s3cret")))
     assert c.get("/api/v1/devices").status_code == 401
     assert c.get("/").status_code == 401
     assert c.get("/healthz").status_code == 200
@@ -89,13 +87,12 @@ def test_basic_auth(tmp_path):
     assert "s3cret" not in repr(Settings(web_password="s3cret"))
 
 
-def test_web_app_does_not_create_tables(tmp_path):
+def test_web_app_does_not_create_tables(db):
     from sqlalchemy import inspect
 
-    url = f"sqlite:///{tmp_path}/empty.sqlite"
     with pytest.raises(RuntimeError, match="db-init"):
-        create_app(Settings(db_url=url))
-    assert inspect(make_engine(url)).get_table_names() == []
+        create_app(db.settings())
+    assert inspect(db.engine()).get_table_names(schema=db.schema) == []
 
 
 def test_window_bounds(client):
@@ -115,22 +112,20 @@ def test_security_headers(client):
     assert "content-security-policy" in client.get("/").headers
 
 
-def test_api_docs_opt_in(tmp_path):
-    url = f"sqlite:///{tmp_path}/docs.sqlite"
-    init_db(make_engine(url))
-    c = TestClient(create_app(Settings(db_url=url, api_docs=True), with_dash=False))
+def test_api_docs_opt_in(db):
+    init_db(db.engine())
+    c = TestClient(create_app(db.settings(api_docs=True), with_dash=False))
     r = c.get("/api/docs")
     assert r.status_code == 200 and "content-security-policy" not in r.headers
 
 
-def test_basic_auth_scheme_case_and_websocket(tmp_path):
+def test_basic_auth_scheme_case_and_websocket(db):
     import base64
 
     from starlette.websockets import WebSocketDisconnect
 
-    url = f"sqlite:///{tmp_path}/auth2.sqlite"
-    init_db(make_engine(url))
-    c = TestClient(create_app(Settings(db_url=url, web_password="s3cret"), with_dash=False))
+    init_db(db.engine())
+    c = TestClient(create_app(db.settings(web_password="s3cret"), with_dash=False))
     good = base64.b64encode(b"aranet:s3cret").decode()
     assert c.get("/api/v1/devices", headers={"Authorization": f"basic {good}"}).status_code == 200
     r = c.get("/api/v1/devices")
@@ -140,24 +135,22 @@ def test_basic_auth_scheme_case_and_websocket(tmp_path):
     assert exc.value.code == 1008
 
 
-def test_csv_filename_is_ascii(tmp_path):
-    url = f"sqlite:///{tmp_path}/name.sqlite"
-    eng = make_engine(url)
+def test_csv_filename_is_ascii(db):
+    eng = db.engine()
     init_db(eng)
     st = Store(eng)
     dev = st.upsert_device(DeviceInfo("AA:BB:CC:DD:EE:22", "Küche ☃", "Aranet4", "x", 60))
-    c = TestClient(create_app(Settings(db_url=url), with_dash=False))
+    c = TestClient(create_app(db.settings(), with_dash=False))
     r = c.get(f"/api/v1/devices/{dev}/export.csv?range=24h")
     assert r.status_code == 200
     assert 'filename="K_che__' in r.headers["content-disposition"]
 
 
-def test_failed_logins_are_throttled(tmp_path):
+def test_failed_logins_are_throttled(db):
     import base64
 
-    url = f"sqlite:///{tmp_path}/throttle.sqlite"
-    init_db(make_engine(url))
-    c = TestClient(create_app(Settings(db_url=url, web_password="s3cret"), with_dash=False))
+    init_db(db.engine())
+    c = TestClient(create_app(db.settings(web_password="s3cret"), with_dash=False))
     good = {"Authorization": "Basic " + base64.b64encode(b"aranet:s3cret").decode()}
     bad = {"Authorization": "Basic " + base64.b64encode(b"aranet:guess").decode()}
     for _ in range(10):  # the browser's first, header-less request never counts
