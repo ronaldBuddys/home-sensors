@@ -111,10 +111,10 @@ The same SQLAlchemy Core code runs on **SQLite and Postgres**, and CI tests both
 
 ```mermaid
 flowchart LR
-    S["Aranet4 sensor"] -- "BLE adverts (passive)" --> C["Collector<br/><code>aranet collect</code>"]
+    S["Aranet4 sensor"] -- "BLE adverts (passive)" --> C["Collector<br/>aranet collect"]
     S -. "GATT history<br/>(gap backfill)" .-> C
     C -- "dedupe insert +<br/>hourly rollup upsert" --> DB[("SQLite or Postgres")]
-    DB --> W["Web process<br/><code>aranet serve</code>"]
+    DB --> W["Web process<br/>aranet serve"]
     W --> API["REST API<br/>/api/v1/*"]
     W --> UI["Dash dashboard<br/>/"]
 ```
