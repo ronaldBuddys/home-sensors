@@ -14,7 +14,7 @@ import time
 from datetime import datetime
 
 from aranet_monitor.config import Settings
-from aranet_monitor.db.store import Store, check_schema, init_db, make_engine
+from aranet_monitor.db.store import Store, check_schema, db_revision, init_db, make_engine
 from aranet_monitor.models import DeviceInfo
 
 log = logging.getLogger("aranet")
@@ -29,7 +29,7 @@ def _setup_logging(verbose: bool) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     if not verbose:
-        for noisy in ("bleak", "uvicorn.access"):
+        for noisy in ("alembic", "bleak", "uvicorn.access"):  # init_db logs migrations
             logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
@@ -427,10 +427,15 @@ def cmd_grant_read(args, settings: Settings) -> int:
     return 0
 
 
-def cmd_db_init(args, settings: Settings) -> int:
-    """Create the schema."""
-    _store(settings)
-    print(f"schema ready at {_safe_url(settings.db_url)}")
+def cmd_db_upgrade(args, settings: Settings) -> int:
+    """Create the schema or migrate it to the newest revision (``db-init`` is an alias)."""
+    engine = make_engine(settings.db_url, schema=settings.db_schema)
+    before = db_revision(engine)
+    init_db(engine)
+    where = _safe_url(settings.db_url) + (
+        f" (schema {settings.db_schema})" if settings.db_schema else ""
+    )
+    print(f"schema at {where}: {before or 'unversioned'} -> {db_revision(engine)}")
     return 0
 
 
@@ -532,8 +537,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("role", help="existing role, created by a DB admin")
     s.set_defaults(func=cmd_grant_read)
 
-    s = sub.add_parser("db-init", help="create the database schema")
-    s.set_defaults(func=cmd_db_init)
+    s = sub.add_parser(
+        "db-upgrade", aliases=["db-init"], help="create or migrate the database schema"
+    )
+    s.set_defaults(func=cmd_db_upgrade)
     return p
 
 

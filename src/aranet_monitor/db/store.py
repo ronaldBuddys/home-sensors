@@ -3,21 +3,40 @@
 from __future__ import annotations
 
 import bisect
+import logging
 import time
 from collections.abc import Iterable, Sequence
+from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, event, func, insert, select, update
+from alembic import command
+from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
+from sqlalchemy import (
+    Connection,
+    Engine,
+    create_engine,
+    event,
+    func,
+    insert,
+    inspect,
+    select,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import DBAPIError
 
 from aranet_monitor.config import ensure_sqlite_dir
 from aranet_monitor.db.rollup import rebuild_rollup, refresh_rollup
-from aranet_monitor.db.schema import devices, events, metadata, readings, readings_hourly
+from aranet_monitor.db.schema import devices, events, readings, readings_hourly
 from aranet_monitor.models import METRICS, DeviceInfo, Reading
 
 DEFAULT_INTERVAL_S = 60
 COPY_CHUNK = 10_000
+BASELINE_REVISION = "0001"  # the schema as ``metadata.create_all`` made it before migrations
+
+log = logging.getLogger(__name__)
 
 
 def make_engine(db_url: str, *, schema: str | None = None, read_only: bool = False) -> Engine:
@@ -52,10 +71,47 @@ def make_engine(db_url: str, *, schema: str | None = None, read_only: bool = Fal
     return engine
 
 
+def schema_of(bind: Engine | Connection) -> str | None:
+    """The Postgres schema ``make_engine`` maps unqualified tables to (None: the default)."""
+    return bind.get_execution_options().get("schema_translate_map", {}).get(None)
+
+
+def alembic_config(connection: Connection) -> Config:
+    """Alembic configuration for the packaged migrations, run on ``connection``."""
+    cfg = Config()
+    cfg.set_main_option("script_location", str(Path(__file__).with_name("migrations")))
+    cfg.attributes["connection"] = connection
+    return cfg
+
+
+def db_revision(engine: Engine) -> str | None:
+    """Current migration revision of the database (None: empty or created before Alembic)."""
+    with engine.connect() as conn:
+        opts = {"version_table_schema": schema_of(conn)}
+        return MigrationContext.configure(conn, opts=opts).get_current_revision()
+
+
 def init_db(engine: Engine) -> None:
-    """Create tables if missing (idempotent) and backfill the hourly rollup if it is empty."""
-    metadata.create_all(engine)
+    """Migrate the schema to the newest revision and backfill the hourly rollup if empty.
+
+    Idempotent. A database created before migrations existed (tables from ``create_all``,
+    no ``alembic_version``) is checked and stamped at the baseline revision first, so it is
+    upgraded in place without data loss or a manual step.
+    """
+    current = db_revision(engine)
+    legacy = current is None and inspect(engine).has_table("devices", schema=schema_of(engine))
+    if legacy:
+        check_schema(engine)
+        current = BASELINE_REVISION
     with engine.begin() as conn:
+        cfg = alembic_config(conn)
+        if legacy:
+            log.info("stamping a database created before migrations at %s", BASELINE_REVISION)
+            command.stamp(cfg, BASELINE_REVISION)
+        head = ScriptDirectory.from_config(cfg).get_current_head()
+        if current != head:
+            log.info("migrating the database schema: %s -> %s", current or "empty", head)
+        command.upgrade(cfg, "head")
         has_raw = conn.execute(select(readings.c.ts).limit(1)).first() is not None
         has_rollup = conn.execute(select(readings_hourly.c.hour).limit(1)).first() is not None
         if has_raw and not has_rollup:
@@ -339,4 +395,14 @@ def copy_db(
     return counts
 
 
-__all__ = ["METRICS", "Store", "check_schema", "copy_db", "init_db", "make_engine"]
+__all__ = [
+    "METRICS",
+    "Store",
+    "alembic_config",
+    "check_schema",
+    "copy_db",
+    "db_revision",
+    "init_db",
+    "make_engine",
+    "schema_of",
+]
