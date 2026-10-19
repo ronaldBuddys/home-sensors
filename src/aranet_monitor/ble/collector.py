@@ -23,10 +23,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import shutil
 import signal
+import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from bleak import BleakScanner
 from bleak.backends.device import BLEDevice
@@ -64,6 +67,32 @@ class _Stats:
     started: float = field(default_factory=time.time)
 
 
+TIMESYNC_MARKER = Path("/run/systemd/timesync/synchronized")
+
+
+def clock_synchronised() -> bool | None:
+    """Return whether the system clock is NTP-synchronised, or ``None`` if that is unknown.
+
+    Checks systemd-timesyncd's marker file first, then asks ``timedatectl``. Any failure
+    (no systemd, command missing, timeout, odd output) yields ``None``.
+    """
+    try:
+        if TIMESYNC_MARKER.exists():
+            return True
+        if shutil.which("timedatectl") is None:
+            return None
+        out = subprocess.run(
+            ["timedatectl", "show", "-p", "NTPSynchronized", "--value"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+    except Exception:
+        return None
+    return {"yes": True, "no": False}.get(out)
+
+
 class Collector:
     """Passive scanner + gap backfill. Run with :meth:`run`."""
 
@@ -73,6 +102,7 @@ class Collector:
     BACKFILL_RETRY_MAX_S = 6 * 3600  # ... up to this
     SCANNER_OP_TIMEOUT_S = 20
     MAX_UNLISTED_DEVICES = 16  # without an allow-list, ignore adverts beyond this many devices
+    CLOCK_POLL_S = 5.0  # how often to re-check the clock while waiting for NTP
     ERROR_LOG_EVERY_S = 60  # e.g. DB down: one traceback per minute, not one per advert
 
     def __init__(
@@ -81,11 +111,13 @@ class Collector:
         store: Store,
         scanner_factory: Callable[..., BleakScanner] = BleakScanner,
         history_fetcher=fetch_history,
+        clock_probe: Callable[[], bool | None] = clock_synchronised,
     ):
         self.settings = settings
         self.store = store
         self._scanner_factory = scanner_factory
         self._fetch_history = history_fetcher
+        self._clock_probe = clock_probe
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
         self._devices: dict[str, _DeviceState] = {}
         self._scanner: BleakScanner | None = None
@@ -358,6 +390,38 @@ class Collector:
         """Request a graceful shutdown."""
         self._stop.set()
 
+    async def _wait_for_clock(self) -> None:
+        """Wait (bounded) for NTP sync so readings are not stamped with a stale clock."""
+        limit = self.settings.wait_clock_sync_s
+        synced = await asyncio.to_thread(self._clock_probe)
+        if synced is None:
+            log.info("cannot tell whether the clock is synchronised; not waiting")
+            return
+        if synced:
+            return
+        log.warning("system clock not synchronised yet; waiting up to %d s before recording", limit)
+        await asyncio.to_thread(self.store.log_event, "clock_wait", f"waiting up to {limit}s")
+        start = time.monotonic()
+        deadline = start + limit
+        while not self._stop.is_set():
+            if time.monotonic() >= deadline:
+                log.warning("clock still not synchronised after %d s; recording anyway", limit)
+                await asyncio.to_thread(
+                    self.store.log_event, "clock_unsynced", f"not synchronised after {limit}s"
+                )
+                return
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), self.CLOCK_POLL_S)
+            if self._stop.is_set():
+                return
+            if await asyncio.to_thread(self._clock_probe):
+                waited = time.monotonic() - start
+                log.info("clock synchronised after %.0f s", waited)
+                await asyncio.to_thread(
+                    self.store.log_event, "clock_synced", f"synchronised after {waited:.0f}s"
+                )
+                return
+
     async def run(self) -> None:
         """Run until :meth:`stop` is called or SIGINT/SIGTERM is received."""
         loop = asyncio.get_running_loop()
@@ -371,6 +435,10 @@ class Collector:
                 "ARANET_DEVICES is not set: accepting adverts from any Aranet device; new "
                 "devices are not backfilled automatically (use `aranet backfill ADDR`)"
             )
+        if self.settings.wait_clock_sync_s > 0:
+            await self._wait_for_clock()
+        if self._stop.is_set():
+            return
         await self._start_scanner()
         tasks = [asyncio.create_task(self._consume()), asyncio.create_task(self._watchdog())]
         try:
