@@ -182,15 +182,13 @@ def test_settings_wait_clock_sync_from_env(monkeypatch):
 
 
 def _ts(store, dev):
-    from sqlalchemy import text
+    from sqlalchemy import select
 
+    from aranet_monitor.db.schema import readings
+
+    stmt = select(readings.c.ts).where(readings.c.device_id == dev).order_by(readings.c.ts)
     with store.engine.connect() as c:
-        return [
-            r[0]
-            for r in c.execute(
-                text("select ts from readings where device_id=:d order by ts"), {"d": dev}
-            )
-        ]
+        return [r[0] for r in c.execute(stmt)]
 
 
 def test_sim_device_seeds_then_tops_up(db, monkeypatch):
