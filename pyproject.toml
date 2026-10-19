@@ -5,6 +5,22 @@ description = "Continuous logger, storage and dashboard for Aranet4 (and other A
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ronald MacEachern" }]
+keywords = ["aranet4", "co2", "bluetooth-low-energy", "iot", "raspberry-pi", "fastapi", "plotly-dash", "sqlalchemy", "postgresql", "sqlite"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Home Automation",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+]
 dependencies = [
     "aranet4>=2.6.0",
     "bleak>=1.0",
@@ -16,7 +32,13 @@ dependencies = [
     "plotly>=6.0",
     "python-dotenv>=1.0",
     "psycopg[binary]>=3.2",
+    "alembic>=1.20.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ronaldBuddys/home-sensors"
+Documentation = "https://github.com/ronaldBuddys/home-sensors/tree/main/docs"
+Issues = "https://github.com/ronaldBuddys/home-sensors/issues"
 
 [project.scripts]
 aranet = "aranet_monitor.cli:main"

@@ -1,33 +1,23 @@
-# Roadmap and next steps
+# Roadmap
 
-## Needs you (manual and one-time)
+Ideas and planned work are tracked as [GitHub issues](https://github.com/ronaldBuddys/home-sensors/issues); comments and pull requests are welcome.
 
-1. ~~**Pair the sensor**~~ (done 2026-10-14; full history imported). Kept for reference: pairing is what makes history backfill work after downtime. It needs the PIN on the Aranet display; see [DEPLOYMENT.md §3](DEPLOYMENT.md#3-pair-the-sensor-one-time-needed-for-history-backfill). Then verify with `uv run aranet backfill <MAC> --last 10`. Run `aranet backfill <MAC> --all` **once**, with the collector stopped, to import the ~3.5 days (5,040 records) the sensor recorded before logging started; automatic gap detection only looks forward.
-2. ~~**Install as services**~~ (done). Re-run `./deploy/install-user-services.sh` after pulling unit changes (the sandboxed units), and consider `loginctl enable-linger $USER`.
-3. ~~**Point at the network Postgres**~~ (done 2026-10-14; see DEVLOG). Still open: enable TLS on the server and set `POSTGRES_SSLMODE=verify-full`; optionally give the dashboard a read-only role (DEPLOYMENT §5).
-3a. **Set `ARANET_DEVICES`** to the sensor's address in `.env` so spoofed adverts are ignored.
-4. **Before the first push** (even to a private remote): remove the `Co-Authored-By: Claude` commit trailers and settle on the author email, then rewrite history accordingly. See [SECURITY.md](SECURITY.md).
-5. **Before publishing**, work through the rest of [SECURITY.md](SECURITY.md): add a LICENSE and run a secret scan.
+## Next
 
-## Good next features
-
-- **Alerts.** Notify when CO₂ stays above the alert threshold for more than N minutes, or when data goes stale (collector or sensor down). Options include ntfy.sh, Home Assistant webhooks and email. This fits as a small loop in the collector, or as a separate `aranet alert` service reading the DB.
-- **Daily and weekly patterns.** An hour-of-day × weekday heatmap of mean CO₂, built from `readings_hourly` (cheap). It's the best view for "when do I need to ventilate?".
-- **Annotations.** Mark events such as "window opened" or "guests" on the chart, using a small `annotations` table and a Dash modal.
-- **Comparing devices.** With more sensors, add small multiples per room, and a device column in the API's `/latest`.
-- **MQTT / Home Assistant publishing** from the collector, since the passive adverts are already decoded.
-- **Retention.** Optionally drop raw rows older than N years and keep `readings_hourly` forever.
-- **Alembic migrations** once the schema needs to change. At the moment it's `create_all` only.
-- **Plotly partial bundle** to cut the cold page load from 1.8 s to about 0.6 s, if the dashboard is used on slow phones. It needs a Dash override; see FINDINGS.
-- **Temperature resolution.** Store the native 0.05 °C instead of the library's 0.1 °C rounding. Adverts are easy to decode directly; history would need to bypass `CurrentReading._set`.
-- **Upstream contributions to Aranet4-Python:**
-  - `get_all_records()` returns empty for Aranet4 (model branch)
-  - the Aranet4 counter byte isn't decoded
-  - `find_nearby()` crashes on `name=None`
-  - history loops have no timeouts
+| Idea | Issue |
+|---|---|
+| **Alerts.** Notify on stale data, CO₂ above the alert threshold for N minutes, or a low sensor battery, e.g. through ntfy.sh, a Home Assistant webhook or e-mail. | [#5](https://github.com/ronaldBuddys/home-sensors/issues/5) |
+| **Annotations.** Mark "window opened" or "guests" on the chart. This would be the API's first write endpoint: a small `annotations` table (the first Alembic migration after the baseline), auth and CSRF. | [#13](https://github.com/ronaldBuddys/home-sensors/issues/13) |
+| **Several rooms.** Small multiples per device and a comparison view. | [#10](https://github.com/ronaldBuddys/home-sensors/issues/10) |
+| **MQTT / Home Assistant.** Publish the decoded adverts. | [#11](https://github.com/ronaldBuddys/home-sensors/issues/11) |
+| **Other sensors.** Generalise naming, the data source and the data model beyond Aranet. | [#9](https://github.com/ronaldBuddys/home-sensors/issues/9) |
+| **Native temperature resolution.** Store 0.05 °C instead of the library's 0.1 °C. | [#15](https://github.com/ronaldBuddys/home-sensors/issues/15) |
+| **Pi 3 performance.** Measure the dashboard on a Pi 3, and consider a Plotly partial bundle to cut the cold page load. | [#14](https://github.com/ronaldBuddys/home-sensors/issues/14) |
+| **Upstream fixes to Aranet4-Python:** `get_all_records()` returns nothing for Aranet4; the counter byte isn't decoded; `find_nearby()` crashes on `name=None`; the history loops have no timeouts. | [#16](https://github.com/ronaldBuddys/home-sensors/issues/16) |
 
 ## Known limitations
 
-- **Daylight-saving fall-back.** On the night clocks go back, the repeated hour is drawn doubled back on itself, because the chart's x-axis uses naive local time (Plotly has no tz-aware axis). Storage is UTC and unaffected. A fix would be an option to display UTC.
-- **History needs pairing.** Until the sensor is paired, detected gaps stay pending. A connection attempt is made at a backed-off rate of at most once every 6 h after a few failures.
-- **Rollup stats are hour-aligned.** Stats for windows longer than 7 days come from the hourly rollup, so the window edges are aligned to the hour (accurate to about 1 hour of data at each end).
+- **History backfill needs pairing.** Until the sensor is paired with the collector's host, detected gaps stay pending. Connection attempts back off to at most once every 6 h.
+- **Long-window stats are hour-aligned.** Stats for windows longer than 7 days come from the hourly rollup, so the window edges are rounded to the hour.
+- **Basic authentication.** The dashboard uses one shared user, and there's no logout. See the accepted risks in [SECURITY.md](SECURITY.md#accepted-risks).
+- **Half-hour time zones.** In the weekly heatmap, each UTC hour counts towards the local hour in which it starts. For time zones with a half-hour offset, cells are therefore shifted by 30 minutes.
