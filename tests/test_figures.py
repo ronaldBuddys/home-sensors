@@ -94,3 +94,57 @@ def test_no_breaks_without_dst_change():
     s = series()
     fig = figures.timeseries_figure(s)
     assert all(len(tr.x) == len(s.t) for tr in fig.data)
+
+
+def _gap_series(n=9, k=4):
+    t = list(range(0, 600 * n, 600))
+    mean = {
+        m: [100.0 + i if i != k else None for i in range(n)] for m in [p[0] for p in figures.PANELS]
+    }
+    lo = {
+        m: [None if v is None else v - 5 - i for i, v in enumerate(col)] for m, col in mean.items()
+    }
+    hi = {
+        m: [None if v is None else v + 7 + i for i, v in enumerate(col)] for m, col in mean.items()
+    }
+    return Series(t=t, mean=mean, lo=lo, hi=hi, bucket_s=600, count=n)
+
+
+def _pieces(values, xs):
+    """Split parallel ``xs``/``values`` lists on ``None`` separators in ``xs``."""
+    out, cur = [], []
+    for x, v in zip(xs, values, strict=True):
+        if x is None:
+            out.append(cur)
+            cur = []
+        else:
+            cur.append((x, v))
+    return [*out, cur]
+
+
+def test_envelope_never_spans_a_gap():
+    n, k = 9, 4
+    s = _gap_series(n, k)
+    fig = figures.timeseries_figure(s)
+    x = figures.to_local(s.t, None)
+    fills = [tr for tr in fig.data if tr.fill]
+    assert fills
+    for tr in fills:
+        for piece in _pieces(tr.y, tr.x):
+            xs = [p[0] for p in piece]
+            assert all(v <= x[k - 1] for v in xs) or all(v >= x[k + 1] for v in xs)
+
+
+def test_envelope_covers_each_segment():
+    n, k = 9, 4
+    s = _gap_series(n, k)
+    fig = figures.timeseries_figure(s)
+    fills = [tr for tr in fig.data if tr.fill]
+    assert len(fills) == len(figures.PANELS)
+    for tr, (metric, *_rest) in zip(fills, figures.PANELS, strict=True):
+        pieces = _pieces(tr.y, tr.x)
+        assert len(pieces) == 2
+        for piece, seg in zip(pieces, (range(0, k), range(k + 1, n)), strict=True):
+            ys = [p[1] for p in piece]
+            assert min(ys) == min(s.lo[metric][i] for i in seg)
+            assert max(ys) == max(s.hi[metric][i] for i in seg)
