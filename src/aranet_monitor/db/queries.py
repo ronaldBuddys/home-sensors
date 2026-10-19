@@ -382,6 +382,7 @@ class Queries:
         status = []
         for d in devs:
             age = now - d["latest_ts"] if d["latest_ts"] else None
+            # Keep in sync with web/assets/app.js (pill).
             limit = max(stale_after_s, int(2.5 * (d["interval_s"] or 60)))
             status.append(
                 {
