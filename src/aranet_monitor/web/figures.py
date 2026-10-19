@@ -84,6 +84,29 @@ def _break_backward_jumps(x: list[str], s: Series) -> tuple[list, dict, dict, di
     return nx, mean, lo, hi
 
 
+def _envelope_polygons(x: list, lo: list, hi: list) -> tuple[list, list]:
+    """Closed lo–hi polygons, one per contiguous run, separated by ``None``.
+
+    ``fill="tonexty"`` ignores ``None`` gaps and draws a wedge across them; disjoint ``toself``
+    shapes keep the wash to the segments that have data. Single-point runs have no area.
+    """
+    px: list = []
+    py: list = []
+    run: list[int] = []
+    for i in (*range(len(x)), None):
+        if i is not None and x[i] is not None and lo[i] is not None and hi[i] is not None:
+            run.append(i)
+            continue
+        if len(run) > 1:
+            if px:
+                px.append(None)
+                py.append(None)
+            px += [x[j] for j in run] + [x[j] for j in reversed(run)]
+            py += [hi[j] for j in run] + [lo[j] for j in reversed(run)]
+        run = []
+    return px, py
+
+
 def empty_figure(message: str, theme: str = "light") -> go.Figure:
     """Placeholder with a centred message (no data yet, etc.)."""
     th = THEMES[theme]
@@ -146,26 +169,14 @@ def timeseries_figure(
         color = th["series"][(row - 1) % len(th["series"])]
         fmt = f",.{dec}f"
         if aggregated:
+            env_x, env_y = _envelope_polygons(x, lo[metric], hi[metric])
             fig.add_trace(
                 go.Scatter(
-                    x=x,
-                    y=hi[metric],
+                    x=env_x,
+                    y=env_y,
                     mode="lines",
                     line={"width": 0},
-                    hoverinfo="skip",
-                    showlegend=False,
-                    connectgaps=False,
-                ),
-                row=row,
-                col=1,
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=lo[metric],
-                    mode="lines",
-                    line={"width": 0},
-                    fill="tonexty",
+                    fill="toself",
                     fillcolor=_hex_to_rgba(color, 0.14),
                     hoverinfo="skip",
                     showlegend=False,
