@@ -87,6 +87,13 @@ def test_initial_render(page):
     assert page.locator("table.summary tbody tr").count() == 4
 
 
+def test_heatmap_card_renders(page):
+    page.wait_for_selector("#heatmap .main-svg .hm image", timeout=10000)
+    card = page.locator(".card:has(#heatmap)")
+    assert "When is CO₂ highest?" in card.inner_text()
+    assert page.locator("#heatmap .ytick").first.inner_text() == "Mon"
+
+
 def test_presets_change_resolution(page):
     page.click("#preset label:has-text('30d')")
     page.wait_for_function(
