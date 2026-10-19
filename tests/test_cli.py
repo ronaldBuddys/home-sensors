@@ -167,3 +167,11 @@ def test_grant_read_checks_backend_and_role(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("ARANET_DB_URL", "postgresql+psycopg://u:p@localhost:1/db")
     assert cli.main(["grant-read", 'x"; DROP TABLE readings; --']) == 2
     assert "invalid role" in capsys.readouterr().err
+
+
+def test_settings_wait_clock_sync_from_env(monkeypatch):
+    from aranet_monitor.config import Settings
+
+    assert Settings().wait_clock_sync_s == 0
+    monkeypatch.setenv("ARANET_WAIT_CLOCK_SYNC_S", "120")
+    assert Settings.from_env().wait_clock_sync_s == 120

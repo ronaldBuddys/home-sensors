@@ -2,6 +2,7 @@ import asyncio
 import time
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import func, select
 
 from aranet_monitor.ble.collector import Collector
@@ -288,3 +289,127 @@ def test_handler_errors_are_rate_limited(store, engine, caplog):
     asyncio.run(drive(c, [lambda s: s.emit() for _ in range(5)]))
     assert sum("failed to handle advert" in r.getMessage() for r in caplog.records) == 1
     assert c._suppressed_errors == 4
+
+
+def _event_kinds(engine):
+    with engine.connect() as conn:
+        return conn.execute(select(events.c.kind)).scalars().all()
+
+
+def _clock_collector(store, probe, order=None, **settings):
+    FakeScanner.instances.clear()
+
+    def factory(**kw):
+        if order is not None:
+            order.append("scanner")
+        return FakeScanner(**kw)
+
+    return Collector(
+        Settings(devices=(ADDR,), backfill_on_start=False, **settings),
+        store,
+        factory,
+        clock_probe=probe,
+    )
+
+
+def test_waits_for_clock_sync_before_scanning(store, engine, monkeypatch):
+    monkeypatch.setattr(Collector, "CLOCK_POLL_S", 0.01)
+    results = iter([False, False, True])
+    order = []
+
+    def probe():
+        order.append("probe")
+        return next(results)
+
+    c = _clock_collector(store, probe, order, wait_clock_sync_s=60)
+    asyncio.run(drive(c, [lambda s: s.emit(with_counter(1))]))
+    assert order == ["probe", "probe", "probe", "scanner"]
+    kinds = _event_kinds(engine)
+    assert "clock_wait" in kinds and "clock_synced" in kinds
+    assert n_rows(engine) == 1
+
+
+def test_clock_sync_timeout_proceeds(store, engine, monkeypatch):
+    monkeypatch.setattr(Collector, "CLOCK_POLL_S", 0.01)
+    c = _clock_collector(store, lambda: False, wait_clock_sync_s=1)
+    asyncio.run(drive(c, [lambda s: s.emit(with_counter(1))]))
+    assert "clock_unsynced" in _event_kinds(engine)
+    assert n_rows(engine) == 1
+
+
+def test_stop_during_clock_wait_ends_run(store, engine, monkeypatch):
+    monkeypatch.setattr(Collector, "CLOCK_POLL_S", 0.01)
+    c = _clock_collector(store, lambda: False, wait_clock_sync_s=60)
+
+    async def go():
+        task = asyncio.create_task(c.run())
+        await asyncio.sleep(0.1)
+        c.stop()
+        await asyncio.wait_for(task, 2)
+
+    asyncio.run(go())
+    assert not FakeScanner.instances
+    assert "stop" in _event_kinds(engine)
+
+
+def test_clock_wait_is_bounded_by_the_limit(store, engine, monkeypatch):
+    monkeypatch.setattr(Collector, "CLOCK_POLL_S", 0.7)
+    c = _clock_collector(store, lambda: False, wait_clock_sync_s=1)
+
+    async def go():
+        t0 = time.monotonic()
+        await c._wait_for_clock()
+        return time.monotonic() - t0
+
+    assert asyncio.run(go()) < 1.3
+    assert "clock_unsynced" in _event_kinds(engine)
+
+
+def test_unknown_clock_state_does_not_wait(store, engine):
+    c = _clock_collector(store, lambda: None, wait_clock_sync_s=60)
+    asyncio.run(drive(c, [lambda s: s.emit(with_counter(1))]))
+    assert "clock_wait" not in _event_kinds(engine)
+    assert n_rows(engine) == 1
+
+
+def test_clock_wait_disabled_by_default(store, engine):
+    def probe():
+        raise AssertionError("probe must not be called when waiting is off")
+
+    c = _clock_collector(store, probe)
+    asyncio.run(drive(c, [lambda s: s.emit(with_counter(1))]))
+    assert n_rows(engine) == 1
+
+
+def test_clock_synchronised_marker(monkeypatch):
+    import subprocess
+    from pathlib import Path
+
+    from aranet_monitor.ble import collector as mod
+
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+    assert mod.clock_synchronised() is True
+
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    monkeypatch.setattr(
+        mod.subprocess, "run", lambda *a, **k: pytest.fail("no subprocess expected")
+    )
+    assert mod.clock_synchronised() is None
+
+    def fake_run(out):
+        return lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/timedatectl")
+    monkeypatch.setattr(mod.subprocess, "run", fake_run("no\n"))
+    assert mod.clock_synchronised() is False
+    monkeypatch.setattr(mod.subprocess, "run", fake_run("yes\n"))
+    assert mod.clock_synchronised() is True
+    monkeypatch.setattr(mod.subprocess, "run", fake_run("weird\n"))
+    assert mod.clock_synchronised() is None
+
+    def boom(*a, **k):
+        raise subprocess.TimeoutExpired("timedatectl", 5)
+
+    monkeypatch.setattr(mod.subprocess, "run", boom)
+    assert mod.clock_synchronised() is None
