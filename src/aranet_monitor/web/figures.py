@@ -11,15 +11,17 @@ from plotly.subplots import make_subplots
 from aranet_monitor.db.queries import Series
 
 # Heatmap ramps, low -> high CO2: green (outdoor air) -> amber (elevated) -> red (high).
-# Derived in OKLCH with a fixed lightness schedule (0.75 -> 0.49 light, 0.46 -> 0.74 dark, steps
-# of 0.065 / 0.07), hue 140 -> 112 -> 75 -> 42 -> 25 and the highest in-gamut chroma, then checked
-# with the dataviz validator (--ordinal, surfaces #fcfcfb / #1a1a19). Lightness is monotone, every
-# adjacent step is >= 0.06 L and the low end clears 2:1 against the surface. The one deliberate
-# exception is "Single hue": a green -> red ramp spans ~115 degrees by design, so colour-vision
-# safety rests on the monotone lightness plus the labelled thresholds on the colour bar.
+# Derived in OKLCH with a fixed lightness schedule (light 0.75 -> 0.49 in steps of 0.065, dark
+# 0.45 -> 0.71 in steps of ~0.065) and the highest in-gamut chroma, hue 140 -> 118 -> 65 -> 36 ->
+# 25 (light) and 145 -> 122 -> 72 -> 40 -> 28 (dark; the amber and orange are nudged warmer so
+# the middle reads as amber rather than olive). Checked with the dataviz validator (--ordinal,
+# surfaces #fcfcfb / #1a1a19): lightness is monotone, every adjacent step is >= 0.06 L and the
+# low end clears 2:1 against the surface. The one deliberate exception is "Single hue": a
+# green -> red ramp spans ~115 degrees by design, so colour-vision safety rests on the monotone
+# lightness plus the labelled thresholds on the colour bar.
 # Light darkens toward high CO2; dark lightens, so low values recede toward the dark surface.
-_HEATMAP_LIGHT = ["#7cc36c", "#9da200", "#b37900", "#bf4700", "#ac262a"]
-_HEATMAP_DARK = ["#2f6633", "#637510", "#a97500", "#e76c2b", "#ff7e77"]
+_HEATMAP_LIGHT = ["#7cc36c", "#92a51f", "#be7100", "#c44018", "#ac262a"]
+_HEATMAP_DARK = ["#2c6330", "#5c720d", "#a76c00", "#e25f2d", "#ff6c5e"]
 
 # Palette validated for colour-vision deficiency. Categorical slots are used in fixed order.
 THEMES = {
@@ -362,7 +364,7 @@ def _heatmap_colorscale(
 
 
 def co2_heatmap_figure(
-    data: dict, theme: str = "light", co2_warn: float = 1000, co2_alert: float = 1400
+    data: dict, theme: str = "light", co2_warn: int = 1000, co2_alert: int = 1400
 ) -> go.Figure:
     """Mean CO₂ by weekday (rows, Monday on top) and local hour (columns).
 
@@ -374,7 +376,10 @@ def co2_heatmap_figure(
         ``"light"`` or ``"dark"``.
     co2_warn, co2_alert
         The "elevated" and "high" thresholds (ppm); the colour scale is amber at the first and
-        orange-red at the second, and the colour bar labels both.
+        orange-red at the second, and the colour bar labels both. If they don't fit the scale
+        (``warn >= alert`` or ``warn`` at or below the 400 ppm baseline) the stops are spaced
+        evenly and only the baseline tick is drawn, so the bar never shows two labels on one
+        value, a tick off the bar, or "high" below "elevated".
 
     Returns
     -------
@@ -400,6 +405,11 @@ def co2_heatmap_figure(
             )
         text.append(cells)
     zmin, zmax = 400, max(co2_alert * 1.15, max(values))
+    if zmin < co2_warn < co2_alert < zmax:
+        tickvals = [zmin, co2_warn, co2_alert]
+        ticktext = [f"{zmin}", f"{co2_warn:,.0f} elevated", f"{co2_alert:,.0f} high"]
+    else:
+        tickvals, ticktext = [zmin], [f"{zmin}"]
     fig = go.Figure(
         go.Heatmap(
             x=hours,
@@ -420,8 +430,8 @@ def co2_heatmap_figure(
                 "tickfont": {"size": 10, "color": th["muted"]},
                 "ticks": "",
                 "tickmode": "array",
-                "tickvals": [zmin, co2_warn, co2_alert],
-                "ticktext": [f"{zmin}", f"{co2_warn:,} elevated", f"{co2_alert:,} high"],
+                "tickvals": tickvals,
+                "ticktext": ticktext,
                 "separatethousands": True,
                 "xpad": 12,
             },
