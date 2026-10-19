@@ -20,7 +20,7 @@ The app runs on a home network: a collector next to the sensor and a dashboard o
 - **Authentication.** With a password set, HTTP Basic auth covers every route, including the dashboard's websockets.
   - The comparison is constant-time (`secrets.compare_digest`).
   - Only `/healthz` stays open, for health checks.
-- **Lockout.** After 5 failed logins from one address, that address gets `429` for 10 minutes.
+- **Lockout.** After 5 failed logins from one address within 10 minutes, that address gets `429` until the 10 minutes are up.
 - **HTTPS.** Optional, with `ARANET_WEB_TLS_CERT`/`ARANET_WEB_TLS_KEY`. `scripts/make-cert.sh` runs a small private CA. A LAN bind over plain HTTP logs a warning.
 - **Security headers** on every response, including 401s:
   - a Content-Security-Policy with everything from `'self'` and `frame-ancestors 'none'`;
@@ -30,7 +30,7 @@ The app runs on a home network: a collector next to the sensor and a dashboard o
 - **Read-only API.** There are no write or control endpoints, and device settings are never changed.
 - **Bounded input:**
   - `start`/`end` must be epoch seconds within `[0, 2^32]`;
-  - a window may span at most about 2 years (longer CSV exports are paged);
+  - an API window may span at most about 2 years (export longer histories in several requests, or with `aranet export`);
   - malformed dashboard state is tolerated rather than raising an error.
 - **SQL injection.** Metric names from query strings are checked against a fixed allow-list before being used as column references. Everything else is bound parameters through SQLAlchemy. CSV filenames are sanitised.
 - **No secrets in logs.** The web password and the DB URL (which carries the DB password) never appear in `repr()` or logs; URLs are logged with the password masked.

@@ -47,9 +47,8 @@ Facts about the hardware, the Bluetooth protocol, the libraries and performance,
   - Every GATT operation now goes through one helper that reconnects and retries, up to 8 times with growing pauses.
   - Downloads run in 500-record chunks, oldest first. Verified chunks are stored immediately, so a failure keeps its progress.
 - **Real-device numbers.** A full 5,040-record download took 135 s with 9 recovered link drops and 2 ring shifts. The gap-only re-run took 36 s with 1 drop.
-- **`aranet backfill ADDR` default.** It now starts at the *first gap* in stored data within the device's horizon (`Store.first_gap_start`), so a re-run only fetches what's missing. `--all` re-reads everything.
+- **`aranet backfill ADDR` default.** It starts at the *first gap* in stored data within the device's horizon (`Store.first_gap_start`), so a re-run only fetches what's missing. `--all` re-reads everything.
 - **Pairing.** It worked with `bluetoothctl` (`agent KeyboardOnly`, then `pair` and `trust`). `--last 10` succeeded straight after pairing.
-
 - **Pairing is required.** Connecting without pairing fails during service discovery (`failed to discover services, device disconnected` or `GATT Protocol Error: Unlikely Error`). `bluetoothd` logs `new_auth() No agent available for request type 2`, which means the sensor requests **passkey authentication**. This is a one-time pairing step where you enter the PIN shown on the Aranet's display; see `docs/DEPLOYMENT.md`.
 - **`get_all_records()` bug in aranet4 2.6.0.** It returns an **empty** history for Aranet4. Its model check only handles names starting with `Aranet2`, `Aranet☢` and `AranetRn`; everything else, including `Aranet4…`, is treated as "unknown model" and returns early. `ble/history.py` therefore drives `Aranet4.get_records()` directly.
 - **No timeouts in the library.** Its history loops (`_get_records_v1` while-loop on notifications, `_get_records_v2` polling loop) have none. Every GATT step here is wrapped in `asyncio.wait_for`.
@@ -71,7 +70,7 @@ Facts about the hardware, the Bluetooth protocol, the libraries and performance,
 - **Dash under FastAPI.** Dash 4 mounts cleanly under FastAPI with `a2wsgi.WSGIMiddleware(dash_app.server)`. Set Dash `compress=False` and let `GZipMiddleware` compress everything once.
 - **Starlette TestClient** warns that `httpx` is deprecated in favour of **`httpx2`** (the pydantic-maintained fork); the dev dependency is now `httpx2`.
 - **SQLAlchemy 2.x** `/` on integer columns is true division; use `//` for SQL integer bucket maths (`(ts // bucket) * bucket`). This works the same on SQLite and Postgres.
-- **SQLite `INSERT … SELECT … ON CONFLICT DO UPDATE`** (used for the rollup upsert) needs a `WHERE` in the SELECT to avoid a parser ambiguity. Our select always has one.
+- **SQLite `INSERT … SELECT … ON CONFLICT DO UPDATE`** (used for the rollup upsert) needs a `WHERE` in the SELECT to avoid a parser ambiguity. The rollup's SELECT always has one.
 - **Postgres numbers.** Postgres returns `numeric` (`Decimal`) for `avg`/sums of integers, so the query layer converts to float before JSON.
 - **Plotly.** `hoversubplots="axis"` with `hovermode="x unified"` gives one tooltip across stacked subplots that share an x-axis.
 - **Playwright** can drive the system Google Chrome with `channel="chrome"`; no `playwright install` download is needed.

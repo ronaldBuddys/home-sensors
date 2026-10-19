@@ -37,7 +37,7 @@ Every dependency has an ARM64 wheel, so nothing heavy compiles on the Pi. A **32
 ```bash
 sudo apt update && sudo apt full-upgrade -y
 sudo apt install -y git bluez
-sudo usermod -aG bluetooth "$USER"           # BlueZ access for headless logins; log out and in again
+sudo usermod -aG bluetooth "$USER"  # BlueZ access for headless logins; log out and in again
 curl -LsSf https://astral.sh/uv/install.sh | sh && exec "$SHELL" -l
 ```
 
@@ -46,7 +46,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh && exec "$SHELL" -l
 ```bash
 git clone https://github.com/ronaldBuddys/home-sensors.git ~/home-sensors
 cd ~/home-sensors
-uv sync --frozen --no-dev                    # first run downloads Python and the wheels: a few minutes
+uv sync --frozen --no-dev  # first run downloads Python and the wheels: a few minutes
 cp .env.example .env && chmod 600 .env
 ```
 
@@ -57,7 +57,7 @@ In the Aranet Home app, turn on **Settings → Smart Home integrations**. The se
 Check the Pi can hear the sensor:
 
 ```console
-$ uv run aranet scan
+$ uv run --no-dev aranet scan
 AA:BB:CC:DD:EE:FF  Aranet4 12345  model=Aranet4  fw=v2.0.12  interval=60s
     {"co2": 831, "temperature": 22.2, "humidity": 54.0, "pressure": 1026.4, "battery": 85, ...}
 ```
@@ -72,7 +72,7 @@ Pair once with `bluetoothctl`. You need to see the sensor's display, which shows
 $ bluetoothctl
 [bluetooth]# agent KeyboardOnly
 [bluetooth]# default-agent
-[bluetooth]# scan on                      # wait until "Aranet4 xxxxx" appears, then:
+[bluetooth]# scan on  # wait until "Aranet4 xxxxx" appears, then:
 [bluetooth]# scan off
 [bluetooth]# pair AA:BB:CC:DD:EE:FF
 [agent] Enter passkey (number in 0-999999): 123456   <- PIN shown on the Aranet display
@@ -83,14 +83,14 @@ $ bluetoothctl
 Check it with a small download:
 
 ```console
-$ uv run aranet backfill AA:BB:CC:DD:EE:FF --last 10
+$ uv run --no-dev aranet backfill AA:BB:CC:DD:EE:FF --last 10
 9 new rows of 10 fetched; device holds 5040 records; 6.3s
 ```
 
 **Optional: import the history the sensor already holds.** Automatic gap detection only fills gaps *after* the newest stored reading. To import the days recorded before you started, run this once while the collector isn't running:
 
 ```bash
-uv run aranet backfill AA:BB:CC:DD:EE:FF --all    # ~5,040 records, 1-3 min; resumable
+uv run --no-dev aranet backfill AA:BB:CC:DD:EE:FF --all  # ~5,040 records, 1-3 min; resumable
 ```
 
 If a download stops partway (weak signal), run `aranet backfill AA:BB:CC:DD:EE:FF` without `--all`. It resumes from the first gap, and stored rows are never duplicated.
@@ -102,9 +102,9 @@ The bond belongs to this host. Pair again if you move the collector to another m
 Settings come from `.env` in the repo root; every option is documented in [`.env.example`](../.env.example). For a Pi, the important ones are:
 
 ```bash
-ARANET_DEVICES=AA:BB:CC:DD:EE:FF     # accept only your sensor (comma-separate several)
-ARANET_WAIT_CLOCK_SYNC_S=300         # the Pi has no RTC: wait for NTP before recording
-ARANET_TZ=Europe/London              # dashboard time zone (default: the system's)
+ARANET_DEVICES=AA:BB:CC:DD:EE:FF  # accept only your sensor (comma-separate several)
+ARANET_WAIT_CLOCK_SYNC_S=300      # the Pi has no RTC: wait for NTP before recording
+ARANET_TZ=Europe/London           # dashboard time zone (default: the system's)
 ```
 
 - **Why the allow-list:** without `ARANET_DEVICES`, the collector accepts adverts from any device using Aranet's manufacturer id, and anyone nearby can spoof one. It then tracks at most 16 devices and only backfills devices it already knew about.
@@ -114,10 +114,10 @@ ARANET_TZ=Europe/London              # dashboard time zone (default: the system'
 ## 6. Run as services
 
 ```bash
-./deploy/install-user-services.sh            # installs, enables and (re)starts aranet-collector and aranet-web
-loginctl enable-linger "$USER"               # start at boot and keep running while logged out
-journalctl --user -u aranet-collector -f     # "device allow-list", then a reading every interval
-uv run aranet status                         # freshness of the newest reading, as JSON
+./deploy/install-user-services.sh         # installs, enables and (re)starts aranet-collector and aranet-web
+loginctl enable-linger "$USER"            # start at boot and keep running while logged out
+journalctl --user -u aranet-collector -f  # "device allow-list", then a reading every interval
+uv run --no-dev aranet status             # freshness of the newest reading, as JSON
 ```
 
 The installer:
@@ -146,12 +146,12 @@ The web app binds to `127.0.0.1` by default. To open it from a phone or laptop, 
 
 ```bash
 ARANET_WEB_HOST=0.0.0.0
-ARANET_WEB_PASSWORD=<output of: openssl rand -base64 24>   # HTTP Basic auth for every page and API route
-ARANET_WEB_TLS_CERT=data/tls/web.crt                       # HTTPS, so the password isn't sent in clear
+ARANET_WEB_PASSWORD=...               # HTTP Basic auth for every page and API route; generate with: openssl rand -base64 24
+ARANET_WEB_TLS_CERT=data/tls/web.crt  # HTTPS, so the password isn't sent in clear
 ARANET_WEB_TLS_KEY=data/tls/web.key
 ```
 
-`aranet serve` refuses a LAN bind without a password. After 5 wrong passwords from one address, that address is locked out for 10 minutes.
+`aranet serve` refuses a LAN bind without a password. After 5 wrong passwords from one address within 10 minutes, that address gets `429` until the 10 minutes are up.
 
 **HTTPS with a private CA:**
 
@@ -184,8 +184,11 @@ CREATE SCHEMA IF NOT EXISTS aranet AUTHORIZATION aranet;
 **Configure** in `.env`:
 
 ```bash
-POSTGRES_HOST=<host>  POSTGRES_PORT=5432  POSTGRES_DB=<database>  POSTGRES_USER=aranet
-POSTGRES_PASSWORD=…                  # special characters are fine (escaped automatically)
+POSTGRES_HOST=<host>
+POSTGRES_PORT=5432
+POSTGRES_DB=<database>
+POSTGRES_USER=aranet
+POSTGRES_PASSWORD=...  # special characters are fine (escaped automatically)
 ARANET_DB_SCHEMA=aranet
 ```
 
@@ -194,8 +197,8 @@ A single `ARANET_DB_URL=postgresql+psycopg://…` also works, and takes preceden
 **Create the tables, and optionally copy existing SQLite data:**
 
 ```bash
-uv run aranet db-upgrade                                      # creates the tables (idempotent)
-uv run aranet copy-db --source sqlite:///data/aranet.sqlite   # optional; target = the configured DB
+uv run --no-dev aranet db-upgrade                                     # creates the tables (idempotent)
+uv run --no-dev aranet copy-db --source sqlite:///data/aranet.sqlite  # optional; target = the configured DB
 systemctl --user restart aranet-collector aranet-web
 ```
 
@@ -207,9 +210,9 @@ systemctl --user restart aranet-collector aranet-web
 2. Copy `data/tls/postgres.crt` and `postgres.key` into the server's data directory. The key must be owned by `postgres` with mode `600`.
 3. In `postgresql.conf`, set `ssl = on`, `ssl_cert_file = 'postgres.crt'` and `ssl_key_file = 'postgres.key'`, then run `SELECT pg_reload_conf();`. Optionally change this app's `host` lines in `pg_hba.conf` to `hostssl`.
 4. In `.env` on the Pi, set `POSTGRES_SSLMODE=verify-full` and `POSTGRES_SSLROOTCERT=data/tls/ca.crt`. With `ARANET_DB_URL`, append `?sslmode=verify-full&sslrootcert=data/tls/ca.crt` instead.
-5. Check with `uv run aranet status`, then restart both services.
+5. Check with `uv run --no-dev aranet status`, then restart both services.
 
-**A read-only role for the dashboard.** Only writers run DDL: `collect`, `db-upgrade`, `seed`/`simulate`, `rollup`, `backfill` and the `copy-db` target. The dashboard never writes, so it can log in as a role that can only `SELECT`. A leaked dashboard password then exposes data, but can't change it.
+**A read-only role for the dashboard.** Only writers run DDL: `collect`, `backfill`, `db-upgrade`, `rollup`, `seed`/`simulate`/`demo` and the `copy-db` target. The dashboard never writes, so it can log in as a role that can only `SELECT`. A leaked dashboard password then exposes data, but can't change it.
 
 1. As an admin, create the role:
 
@@ -220,7 +223,7 @@ systemctl --user restart aranet-collector aranet-web
 2. As the app role, grant read access. This also covers tables added later:
 
    ```bash
-   uv run aranet grant-read dashboard_ro
+   uv run --no-dev aranet grant-read dashboard_ro
    ```
 
 3. In `.env`, set `ARANET_WEB_DB_USER=dashboard_ro` and `ARANET_WEB_DB_PASSWORD=…`, then restart the dashboard.
@@ -232,12 +235,12 @@ The web app also opens every Postgres transaction read-only, which guards agains
 ```bash
 cd ~/home-sensors
 git pull
-./deploy/install-user-services.sh            # syncs the venv (new dependencies), reinstalls the units, restarts both
-uv run aranet status
+./deploy/install-user-services.sh  # syncs the venv (new dependencies), reinstalls the units, restarts both
+uv run --no-dev aranet status
 ```
 
 - **Re-running the installer is the safe way to upgrade.** Restarting the services alone isn't enough when a release adds a dependency: the old virtual environment fails at start-up.
-- **Schema changes are applied automatically.** Alembic migrations run when the collector starts, or run `uv run aranet db-upgrade` yourself.
+- **Schema changes are applied automatically.** Alembic migrations run when the collector starts, or run `uv run --no-dev aranet db-upgrade` yourself.
 - **Pre-migration databases** (created before Alembic was added) are recognised, and stamped at the baseline revision with no data change.
 
 ## 10. Troubleshooting

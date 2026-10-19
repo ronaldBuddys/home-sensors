@@ -1,16 +1,16 @@
 # Architecture
 
+```mermaid
+flowchart LR
+    S["Aranet4 sensor"] -- "BLE adverts, every 3-13 s (passive)" --> C["Collector<br/>aranet collect<br/>asyncio + bleak"]
+    S -. "GATT history<br/>(start-up and gaps)" .-> C
+    C -- "window-dedupe insert +<br/>hourly rollup refresh" --> DB[("SQLite (WAL) or Postgres<br/>one ARANET_DB_URL")]
+    DB --> W["Web process<br/>aranet serve (uvicorn)"]
+    W --> API["FastAPI<br/>/api/v1/*, /api/openapi.json, /healthz"]
+    W --> UI["Dash UI at /<br/>(Flask app mounted via a2wsgi)"]
 ```
- Aranet4 ──BLE adverts (~every 3–13 s)──▶ collector  (aranet collect; asyncio + bleak, listen-only)
-         ◀── GATT history (startup / gaps) ─┘   │  window-dedupe insert + hourly rollup refresh
-                                                ▼
-                         SQLite (WAL)  or  Postgres     ◀── one ARANET_DB_URL
-                                                ▲
-                  web process (aranet serve; uvicorn)
-                  ├── FastAPI  /api/v1/*   /api/openapi.json   /healthz
-                  └── Dash UI  /  (Flask app mounted via a2wsgi; callbacks call the query layer
-                                   in-process, not over HTTP)
-```
+
+Dash callbacks call the query layer in-process, not over HTTP.
 
 There are two processes, and they share nothing but the database. The collector can therefore run on a Raspberry Pi next to the sensor while the web app runs elsewhere against the same Postgres.
 
@@ -39,7 +39,7 @@ There are two processes, and they share nothing but the database. The collector 
 
 There is one row per **logged measurement**, with primary key `(device_id, ts)`. On SQLite the table is `WITHOUT ROWID`, so rows are clustered by time.
 
-- `ts` is the integer epoch seconds (UTC) at which the **device** logged the value. It is computed as `receive_time − ago`, not taken from the time we heard the advert.
+- `ts` is the integer epoch seconds (UTC) at which the **device** logged the value. It is computed as `receive_time − ago`, not taken from the time the advert was received.
 - `source` is one of `adv`, `history` or `sim`.
 - `battery`, `status` and `rssi` exist only for advert rows; history rows leave them NULL.
 - Columns for Radon and Radiation models exist but are only populated for those devices.
@@ -56,7 +56,7 @@ For each metric, this table stores `sum`, `cnt`, `min` and `max` per device-hour
 
 ### Schema changes
 
-Writers (`collect`, `db-upgrade`, seeding, the `copy-db` target) run `init_db`, which applies Alembic migrations up to the newest revision. It handles three cases:
+Writers (`collect`, `backfill`, `db-upgrade`, `rollup`, `seed`/`simulate`/`demo` and the `copy-db` target) run `init_db`, which applies Alembic migrations up to the newest revision. It handles three cases:
 
 - **Empty database:** migrated from scratch.
 - **Created before migrations existed** (tables but no `alembic_version`): checked, then stamped at the baseline with no data change.

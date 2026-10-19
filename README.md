@@ -35,7 +35,7 @@ It keeps its data in its own `data/demo.sqlite` and never touches a configured d
 <summary>Without uv</summary>
 
 ```bash
-python3 -m venv .venv && . .venv/bin/activate   # Python 3.11+
+python3.11 -m venv .venv && . .venv/bin/activate   # any Python 3.11+
 pip install -e .
 aranet demo
 ```
@@ -56,7 +56,7 @@ aranet demo
    "temperature": 20.85, "humidity": 51.0, "pressure": 1014.3, "battery": 80, ...}
 
   $ curl -s "localhost:8050/api/v1/devices/1/readings?range=7d&metrics=co2&max_points=10"
-  {"device_id": 1, "bucket_s": 86400, "count": 8,
+  {"device_id": 1, "start": 1791808499, "end": 1792413299, "bucket_s": 86400, "count": 8,
    "t": [1791806400, 1791892800, ...],
    "mean": {"co2": [924.4, 1350.89, ...]}, "min": {"co2": [408.0, ...]}, "max": {"co2": [1730.0, ...]},
    "units": {"co2": "ppm"}}
@@ -82,7 +82,7 @@ The same SQLAlchemy Core code runs on **SQLite and Postgres**, and CI tests both
 - **Exact re-aggregation.** Long windows read the rollup and recombine it as `SUM(sum) / NULLIF(SUM(cnt), 0)` with integer bucketing, so the means are exact, not averages of averages ([`db/queries.py`](src/aranet_monitor/db/queries.py)).
 - **The weekday × hour heatmap, timezone-correct.** The window is split at each DST change, and each piece runs one grouped `SELECT` keyed on `((hour + :utc_offset) / 3600) % 168`, with the offset as a bound parameter ([`Queries.co2_heatmap`](src/aranet_monitor/db/queries.py)).
 - **Gap detection with a window function.** `LEAD(ts) OVER (ORDER BY ts)` finds holes in the stored data to backfill ([`db/store.py`](src/aranet_monitor/db/store.py)).
-- **Keyset pagination** for streaming CSV exports of any size, and **insert-or-ignore** for an idempotent SQLite→Postgres copy (`aranet copy-db`).
+- **Keyset pagination** for streaming CSV exports, and **insert-or-ignore** for an idempotent SQLite→Postgres copy (`aranet copy-db`).
 - **Least privilege on Postgres:**
   - the app's own schema;
   - a dashboard role granted `SELECT` only (`aranet grant-read`, using `ALTER DEFAULT PRIVILEGES`);
@@ -116,7 +116,7 @@ flowchart LR
     C -- "dedupe insert +<br/>hourly rollup upsert" --> DB[("SQLite or Postgres")]
     DB --> W["Web process<br/>aranet serve"]
     W --> API["REST API<br/>/api/v1/*"]
-    W --> UI["Dash dashboard<br/>/"]
+    W --> UI["Dash dashboard"]
 ```
 
 The two processes share nothing but the database, so the collector can run on a Pi next to the sensor while the dashboard runs anywhere else. Details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -126,7 +126,7 @@ The two processes share nothing but the database, so the collector can run on a 
 The short version for a Raspberry Pi (3, 4, 5 or Zero 2 W, 64-bit OS) or any Linux machine with Bluetooth:
 
 1. In the Aranet Home app, turn on **Settings → Smart Home integrations**.
-2. Clone the repo, run `uv sync --frozen --no-dev`, then `uv run aranet scan`. Your sensor and its readings should be listed.
+2. Clone the repo, run `uv sync --frozen --no-dev`, then `uv run --no-dev aranet scan`. Your sensor and its readings should be listed.
 3. Copy `.env.example` to `.env` and set `ARANET_DEVICES` to the sensor's address.
 4. Optional: pair once with `bluetoothctl` (PIN on the sensor's display) so gaps can be backfilled.
 5. Run `./deploy/install-user-services.sh` and `loginctl enable-linger "$USER"`. These install the collector and the dashboard as sandboxed systemd user services.
@@ -163,7 +163,7 @@ ARANET_TEST_PG_URL=postgresql+psycopg://postgres:pg@localhost:55432/postgres uv 
 uv run pytest -m e2e tests/e2e                  # headless-Chrome dashboard tests
 ```
 
-CI runs lint, the tests on Python 3.11–3.13, the full suite on Postgres 17 and the browser tests on every push and pull request. A weekly job runs `pip-audit` on the lock file. See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions.
+CI runs lint, the tests on Python 3.11–3.13, the full suite on Postgres 17 and the browser tests on every pull request and on pushes to `main`. A weekly job runs `pip-audit` on the lock file. See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions.
 
 ```
 src/aranet_monitor/
@@ -180,7 +180,7 @@ src/aranet_monitor/
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md): design, data model, dedupe, rollup and backfill logic.
 - [DEPLOYMENT.md](docs/DEPLOYMENT.md): Raspberry Pi, pairing, services, Postgres, HTTPS, upgrading.
 - [FINDINGS.md](docs/FINDINGS.md): engineering notes on the Aranet4 protocol, BlueZ, the libraries and performance.
-- [SECURITY.md](docs/SECURITY.md): security model and accepted risks. To report a vulnerability, see [SECURITY.md](SECURITY.md).
+- [SECURITY.md](docs/SECURITY.md): security model and accepted risks. To report a vulnerability, see the [security policy](SECURITY.md).
 - [ROADMAP.md](docs/ROADMAP.md): known limitations and what's next. Ideas are tracked as [issues](https://github.com/ronaldBuddys/home-sensors/issues).
 
 ## License
