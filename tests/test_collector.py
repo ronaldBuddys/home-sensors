@@ -47,9 +47,19 @@ def n_rows(engine):
         return c.execute(select(func.count()).select_from(readings)).scalar()
 
 
+async def _wait_for_scanner(task, timeout=5.0):
+    # The collector may do start-up work (e.g. backfill) before it creates the scanner.
+    deadline = time.monotonic() + timeout
+    while not (FakeScanner.instances and FakeScanner.instances[-1].running):
+        if task.done():
+            task.result()  # surface a collector crash instead of timing out
+        assert time.monotonic() < deadline, "collector never started a scanner"
+        await asyncio.sleep(0.01)
+
+
 async def drive(collector, actions, settle=0.3):
     task = asyncio.create_task(collector.run())
-    await asyncio.sleep(0.05)
+    await _wait_for_scanner(task)
     for act in actions:
         act(FakeScanner.instances[-1])
         await asyncio.sleep(0.05)
