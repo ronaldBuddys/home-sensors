@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Issue a TLS certificate from a small private CA kept in data/tls/ (git-ignored).
-#   ./scripts/make-cert.sh web 192.0.2.10 myhost.local     -> data/tls/web.{crt,key}
-#   ./scripts/make-cert.sh postgres 192.0.2.20             -> data/tls/postgres.{crt,key}
+#   ./scripts/make-cert.sh web 192.168.1.50 myhost.local   -> data/tls/web.{crt,key}
+#   ./scripts/make-cert.sh postgres 192.168.1.60           -> data/tls/postgres.{crt,key}
 # The CA is created on first use (data/tls/ca.{crt,key}). Install ca.crt on the devices that
 # open the dashboard (browsers then trust it) and use it as the Postgres sslrootcert.
 # Every name/IP clients use to connect must be listed (verify-full checks it).

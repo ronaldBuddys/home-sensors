@@ -5,14 +5,15 @@ from fastapi.testclient import TestClient
 
 from aranet_monitor.api.app import create_app
 from aranet_monitor.config import Settings
-from aranet_monitor.db.store import Store, init_db
+from aranet_monitor.db.store import Store, init_db, make_engine
 from aranet_monitor.models import DeviceInfo
 from aranet_monitor.sim.simulator import Aranet4Simulator
 
 
 @pytest.fixture(scope="module")
-def client(module_db):
-    eng = module_db.engine()
+def client(tmp_path_factory):
+    url = f"sqlite:///{tmp_path_factory.mktemp('api')}/api.sqlite"
+    eng = make_engine(url)
     init_db(eng)
     st = Store(eng)
     sim = Aranet4Simulator()
@@ -20,7 +21,7 @@ def client(module_db):
     now = int(time.time())
     st.bulk_insert_raw(dev, sim.generate(now - 10 * 86400, now - 30))
     st.log_event("start", "test", dev)
-    return TestClient(create_app(module_db.settings()))
+    return TestClient(create_app(Settings(db_url=url)))
 
 
 def test_devices_and_latest(client):
@@ -28,13 +29,6 @@ def test_devices_and_latest(client):
     assert len(devs) == 1 and devs[0]["name"] == "Aranet4 SIM"
     lat = client.get(f"/api/v1/devices/{devs[0]['id']}/latest").json()
     assert 400 <= lat["co2"] < 5000 and lat["age_s"] < 120
-
-
-def test_device_matches_list_item(client):
-    listed = client.get("/api/v1/devices").json()[0]
-    one = client.get(f"/api/v1/devices/{listed['id']}").json()
-    assert one["latest_ts"] is not None and one["earliest_ts"] is not None
-    assert one == listed
 
 
 def test_readings_ranges(client):
@@ -78,11 +72,12 @@ def test_dash_is_mounted(client):
     assert client.get("/healthz").json() == {"ok": True}
 
 
-def test_basic_auth(db):
+def test_basic_auth(tmp_path):
     import base64
 
-    init_db(db.engine())
-    c = TestClient(create_app(db.settings(web_password="s3cret")))
+    url = f"sqlite:///{tmp_path}/auth.sqlite"
+    init_db(make_engine(url))
+    c = TestClient(create_app(Settings(db_url=url, web_password="s3cret")))
     assert c.get("/api/v1/devices").status_code == 401
     assert c.get("/").status_code == 401
     assert c.get("/healthz").status_code == 200
@@ -94,12 +89,13 @@ def test_basic_auth(db):
     assert "s3cret" not in repr(Settings(web_password="s3cret"))
 
 
-def test_web_app_does_not_create_tables(db):
+def test_web_app_does_not_create_tables(tmp_path):
     from sqlalchemy import inspect
 
+    url = f"sqlite:///{tmp_path}/empty.sqlite"
     with pytest.raises(RuntimeError, match="db-init"):
-        create_app(db.settings())
-    assert inspect(db.engine()).get_table_names(schema=db.schema) == []
+        create_app(Settings(db_url=url))
+    assert inspect(make_engine(url)).get_table_names() == []
 
 
 def test_window_bounds(client):
@@ -119,20 +115,22 @@ def test_security_headers(client):
     assert "content-security-policy" in client.get("/").headers
 
 
-def test_api_docs_opt_in(db):
-    init_db(db.engine())
-    c = TestClient(create_app(db.settings(api_docs=True), with_dash=False))
+def test_api_docs_opt_in(tmp_path):
+    url = f"sqlite:///{tmp_path}/docs.sqlite"
+    init_db(make_engine(url))
+    c = TestClient(create_app(Settings(db_url=url, api_docs=True), with_dash=False))
     r = c.get("/api/docs")
     assert r.status_code == 200 and "content-security-policy" not in r.headers
 
 
-def test_basic_auth_scheme_case_and_websocket(db):
+def test_basic_auth_scheme_case_and_websocket(tmp_path):
     import base64
 
     from starlette.websockets import WebSocketDisconnect
 
-    init_db(db.engine())
-    c = TestClient(create_app(db.settings(web_password="s3cret"), with_dash=False))
+    url = f"sqlite:///{tmp_path}/auth2.sqlite"
+    init_db(make_engine(url))
+    c = TestClient(create_app(Settings(db_url=url, web_password="s3cret"), with_dash=False))
     good = base64.b64encode(b"aranet:s3cret").decode()
     assert c.get("/api/v1/devices", headers={"Authorization": f"basic {good}"}).status_code == 200
     r = c.get("/api/v1/devices")
@@ -142,22 +140,24 @@ def test_basic_auth_scheme_case_and_websocket(db):
     assert exc.value.code == 1008
 
 
-def test_csv_filename_is_ascii(db):
-    eng = db.engine()
+def test_csv_filename_is_ascii(tmp_path):
+    url = f"sqlite:///{tmp_path}/name.sqlite"
+    eng = make_engine(url)
     init_db(eng)
     st = Store(eng)
     dev = st.upsert_device(DeviceInfo("AA:BB:CC:DD:EE:22", "Küche ☃", "Aranet4", "x", 60))
-    c = TestClient(create_app(db.settings(), with_dash=False))
+    c = TestClient(create_app(Settings(db_url=url), with_dash=False))
     r = c.get(f"/api/v1/devices/{dev}/export.csv?range=24h")
     assert r.status_code == 200
     assert 'filename="K_che__' in r.headers["content-disposition"]
 
 
-def test_failed_logins_are_throttled(db):
+def test_failed_logins_are_throttled(tmp_path):
     import base64
 
-    init_db(db.engine())
-    c = TestClient(create_app(db.settings(web_password="s3cret"), with_dash=False))
+    url = f"sqlite:///{tmp_path}/throttle.sqlite"
+    init_db(make_engine(url))
+    c = TestClient(create_app(Settings(db_url=url, web_password="s3cret"), with_dash=False))
     good = {"Authorization": "Basic " + base64.b64encode(b"aranet:s3cret").decode()}
     bad = {"Authorization": "Basic " + base64.b64encode(b"aranet:guess").decode()}
     for _ in range(10):  # the browser's first, header-less request never counts
@@ -181,23 +181,3 @@ def test_web_uses_its_own_db_login():
     )
     assert Settings(db_url="sqlite:///x.sqlite").web_db_url == "sqlite:///x.sqlite"
     assert "ro-pw" not in repr(s)
-
-
-def test_co2_heatmap_endpoint(client):
-    r = client.get("/api/v1/devices/1/co2-heatmap?days=28")
-    assert r.status_code == 200
-    hm = r.json()
-    assert hm["device_id"] == 1 and hm["tz"] == "local"
-    assert hm["end"] - hm["start"] == 28 * 86400 and hm["end"] % 3600 == 0
-    assert hm["weekdays"][0] == "Mon" and hm["hours"] == list(range(24))
-    assert len(hm["mean"]) == 7 and all(len(row) == 24 for row in hm["mean"])
-    assert len(hm["count"]) == 7 and all(len(row) == 24 for row in hm["count"])
-    cells = [v for row in hm["mean"] for v in row if v is not None]
-    assert cells and all(400 <= v < 5000 for v in cells)
-    default = client.get("/api/v1/devices/1/co2-heatmap").json()
-    assert default["end"] - default["start"] == 28 * 86400
-    assert client.get("/api/v1/devices/1/co2-heatmap?days=0").status_code == 422
-    assert client.get("/api/v1/devices/1/co2-heatmap?days=366").status_code == 422
-    assert client.get("/api/v1/devices/99/co2-heatmap").status_code == 404
-    schema = client.get("/api/openapi.json").json()["components"]["schemas"]["Co2Heatmap"]
-    assert schema["properties"]["mean"]["description"]

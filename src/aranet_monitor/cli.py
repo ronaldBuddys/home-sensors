@@ -5,21 +5,17 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
-import dataclasses
 import json
 import logging
 import sys
-import threading
 import time
 from datetime import datetime
 
 from aranet_monitor.config import Settings
-from aranet_monitor.db.store import Store, check_schema, db_revision, init_db, make_engine
+from aranet_monitor.db.store import Store, check_schema, init_db, make_engine
 from aranet_monitor.models import DeviceInfo
 
 log = logging.getLogger("aranet")
-
-DEMO_DB_URL = "sqlite:///data/demo.sqlite"
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -29,7 +25,7 @@ def _setup_logging(verbose: bool) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     if not verbose:
-        for noisy in ("alembic", "bleak", "uvicorn.access"):  # init_db logs migrations
+        for noisy in ("bleak", "uvicorn.access"):
             logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
@@ -38,41 +34,6 @@ def _store(settings: Settings, db_url: str | None = None) -> Store:
     engine = make_engine(db_url or settings.db_url, schema=None if db_url else settings.db_schema)
     init_db(engine)
     return Store(engine)
-
-
-def _open_store_with_retry(settings: Settings, *, max_wait_s: float | None = None, sleep=None):
-    """Writer access that waits for an unreachable database (collector start-up).
-
-    Connection-type errors are logged as one line (no traceback) and retried with back-off
-    (2 s doubling to 60 s); anything else, such as a programming or permission error, raises
-    at once. ``max_wait_s`` bounds the total wait (None: wait forever, systemd owns the
-    lifecycle). ``init_db`` is idempotent, so a retry after a half-finished attempt is safe.
-    """
-    from sqlalchemy.exc import InterfaceError, OperationalError
-
-    sleep = sleep or time.sleep
-    delay, waited, attempts = 2, 0, 0
-    while True:
-        attempts += 1
-        try:
-            store = _store(settings)
-        except (OperationalError, InterfaceError) as e:
-            if max_wait_s is not None and waited + delay > max_wait_s:
-                raise
-            reason = (str(e.orig or e).splitlines() or [""])[0]
-            log.warning(
-                "database not reachable (%s: %s); retrying in %ds",
-                type(e).__name__,
-                reason.replace(settings.db_url, _safe_url(settings.db_url)),
-                delay,
-            )
-            sleep(delay)
-            waited += delay
-            delay = min(delay * 2, 60)
-            continue
-        if attempts > 1:
-            log.info("database reachable after %d attempt(s)", attempts)
-        return store
 
 
 def _queries(settings: Settings):
@@ -136,10 +97,7 @@ def cmd_collect(args, settings: Settings) -> int:
     """Run the continuous collector."""
     from aranet_monitor.ble.collector import Collector
 
-    try:
-        store = _open_store_with_retry(settings)
-    except KeyboardInterrupt:
-        return 0
+    store = _store(settings)
     log.info("collector writing to %s", _safe_url(settings.db_url))
     if settings.devices:
         log.info("device allow-list: %s", ", ".join(settings.devices))
@@ -203,6 +161,10 @@ def cmd_backfill(args, settings: Settings) -> int:
 
 def cmd_serve(args, settings: Settings) -> int:
     """Serve the FastAPI app (API + Dash dashboard)."""
+    import uvicorn
+
+    from aranet_monitor.api.app import create_app
+
     host = args.host or settings.web_host
     port = args.port or settings.web_port
     if not settings.web_password and not _is_loopback(host) and not args.allow_no_auth:
@@ -230,16 +192,6 @@ def cmd_serve(args, settings: Settings) -> int:
         _safe_url(settings.web_db_url),
         f", schema {settings.db_schema}" if settings.db_schema else "",
     )
-    _run_web(settings, host, port)
-    return 0
-
-
-def _run_web(settings: Settings, host: str, port: int) -> None:
-    """Run the FastAPI app (API + dashboard) under uvicorn until interrupted."""
-    import uvicorn
-
-    from aranet_monitor.api.app import create_app
-
     uvicorn.run(
         create_app(settings),
         host=host,
@@ -248,31 +200,21 @@ def _run_web(settings: Settings, host: str, port: int) -> None:
         ssl_certfile=settings.web_tls_cert,
         ssl_keyfile=settings.web_tls_key,
     )
-
-
-def _sim_device(store: Store, interval_s: int, history_days: float):
-    """Upsert the simulated device; seed it, or top it up if its data is stale."""
-    from aranet_monitor.sim.simulator import SIM_NAME, Aranet4Simulator
-
-    sim = Aranet4Simulator(interval_s=interval_s)
-    dev = store.upsert_device(DeviceInfo(sim.address, SIM_NAME, "Aranet4", "sim", interval_s))
-    now = int(time.time())
-    last = store.last_ts(dev)
-    if last is None:
-        n = store.bulk_insert_raw(dev, sim.generate(now - int(history_days * 86400), now))
-        log.info("seeded %d simulated rows", n)
-    elif now - last > 2 * interval_s:
-        n = store.bulk_insert_raw(dev, sim.generate(last + interval_s, now))
-        log.info("topped up %d simulated rows", n)
-    return dev, sim
+    return 0
 
 
 def cmd_simulate(args, settings: Settings) -> int:
     """Write live synthetic readings (for UI development without a sensor)."""
-    from aranet_monitor.sim.simulator import SIM_NAME
+    from aranet_monitor.sim.simulator import SIM_NAME, Aranet4Simulator
 
     store = _store(settings, args.db)
-    dev, sim = _sim_device(store, args.interval, args.history_days)
+    sim = Aranet4Simulator(interval_s=args.interval)
+    dev = store.upsert_device(DeviceInfo(sim.address, SIM_NAME, "Aranet4", "sim", args.interval))
+    now = int(time.time())
+    last = store.last_ts(dev)
+    if last is None:
+        n = store.bulk_insert_raw(dev, sim.generate(now - int(args.history_days * 86400), now))
+        log.info("seeded %d simulated rows", n)
     log.info("simulating %s every %ss (Ctrl-C to stop)", SIM_NAME, args.interval)
     try:
         while True:
@@ -281,45 +223,6 @@ def cmd_simulate(args, settings: Settings) -> int:
             time.sleep(args.interval)
     except KeyboardInterrupt:
         return 0
-
-
-def cmd_demo(args, settings: Settings) -> int:
-    """Try it without a sensor: simulated data written live + the dashboard."""
-    url = args.db or DEMO_DB_URL
-    demo = dataclasses.replace(
-        settings,
-        db_url=url,
-        db_schema=None,
-        web_db_user=None,
-        web_db_password=None,
-        web_tls_cert=None,
-        web_tls_key=None,
-        web_password=None,
-    )
-    port = args.port or settings.web_port
-    store = _store(demo, url)
-    dev, sim = _sim_device(store, args.interval, args.days)
-    stop = threading.Event()
-
-    def writer() -> None:
-        while not stop.wait(args.interval):
-            try:
-                store.insert_readings(dev, [sim.step(int(time.time()))], args.interval)
-            except Exception:
-                log.exception("demo writer failed; will retry")
-
-    thread = threading.Thread(target=writer, name="demo-writer", daemon=True)
-    thread.start()
-    print(
-        f"Demo dashboard: http://127.0.0.1:{port}/  "
-        f"(simulated sensor, data in {_safe_url(url)}; Ctrl-C to stop)"
-    )
-    try:
-        _run_web(demo, "127.0.0.1", port)
-    finally:
-        stop.set()
-        thread.join(timeout=2)
-    return 0
 
 
 def cmd_seed(args, settings: Settings) -> int:
@@ -427,15 +330,10 @@ def cmd_grant_read(args, settings: Settings) -> int:
     return 0
 
 
-def cmd_db_upgrade(args, settings: Settings) -> int:
-    """Create the schema or migrate it to the newest revision (``db-init`` is an alias)."""
-    engine = make_engine(settings.db_url, schema=settings.db_schema)
-    before = db_revision(engine)
-    init_db(engine)
-    where = _safe_url(settings.db_url) + (
-        f" (schema {settings.db_schema})" if settings.db_schema else ""
-    )
-    print(f"schema at {where}: {before or 'unversioned'} -> {db_revision(engine)}")
+def cmd_db_init(args, settings: Settings) -> int:
+    """Create the schema."""
+    _store(settings)
+    print(f"schema ready at {_safe_url(settings.db_url)}")
     return 0
 
 
@@ -501,13 +399,6 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--history-days", type=float, default=7)
     s.set_defaults(func=cmd_simulate)
 
-    s = sub.add_parser("demo", help="try it without a sensor: simulated data + dashboard")
-    s.add_argument("--db", help=f"DB URL (default: {DEMO_DB_URL}; never ARANET_DB_URL)")
-    s.add_argument("--days", type=float, default=30, help="days of history to seed")
-    s.add_argument("--interval", type=int, default=60)
-    s.add_argument("--port", type=int)
-    s.set_defaults(func=cmd_demo)
-
     s = sub.add_parser("seed", help="generate synthetic history")
     s.add_argument("--db", help="DB URL (default: ARANET_DB_URL). Use a separate DB!")
     s.add_argument("--days", type=float, default=365)
@@ -537,10 +428,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("role", help="existing role, created by a DB admin")
     s.set_defaults(func=cmd_grant_read)
 
-    s = sub.add_parser(
-        "db-upgrade", aliases=["db-init"], help="create or migrate the database schema"
-    )
-    s.set_defaults(func=cmd_db_upgrade)
+    s = sub.add_parser("db-init", help="create the database schema")
+    s.set_defaults(func=cmd_db_init)
     return p
 
 

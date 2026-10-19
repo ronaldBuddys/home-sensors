@@ -10,10 +10,7 @@ from plotly.subplots import make_subplots
 
 from aranet_monitor.db.queries import Series
 
-# Sequential blue ramp, steps 100-700 every other step (dataviz palette), light -> dark.
-_BLUE_RAMP = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
-
-# Palette validated for colour-vision deficiency. Categorical slots are used in fixed order.
+# Reference palette (dataviz skill, references/palette.md). Categorical slots in fixed order.
 THEMES = {
     "light": {
         "surface": "#fcfcfb",
@@ -23,7 +20,6 @@ THEMES = {
         "grid": "#e1e0d9",
         "axis": "#c3c2b7",
         "series": ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"],
-        "sequential": _BLUE_RAMP,
     },
     "dark": {
         "surface": "#1a1a19",
@@ -33,8 +29,6 @@ THEMES = {
         "grid": "#2c2c2a",
         "axis": "#383835",
         "series": ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300"],
-        # Low values recede toward the dark surface, high values come forward.
-        "sequential": _BLUE_RAMP[::-1],
     },
 }
 # Smallest y-axis span per panel, so quantisation steps (0.1 °C, 1 %RH) and sensor noise
@@ -336,95 +330,6 @@ def _co2_bands(fig: go.Figure, row: int, s: Series, warn: int, alert: int, th: d
     lows = [v for v in s.lo["co2"] if v is not None]
     lo = min(lows) if lows else 400
     fig.update_yaxes(range=[max(0, min(lo, 400) - 30), max(top * 1.05, warn * 0.8)], row=row, col=1)
-
-
-def co2_heatmap_figure(data: dict, theme: str = "light") -> go.Figure:
-    """Mean CO₂ by weekday (rows, Monday on top) and local hour (columns).
-
-    Parameters
-    ----------
-    data
-        ``Queries.co2_heatmap`` output: ``weekdays``, ``hours`` and 7 × 24 ``mean``/``count``.
-    theme
-        ``"light"`` or ``"dark"``.
-
-    Returns
-    -------
-    go.Figure
-        One heatmap on the theme's sequential blue ramp. The scale starts at the outdoor
-        baseline (400 ppm) and tops out no lower than 1400 ppm, so a well-ventilated home
-        doesn't look alarming. Empty cells stay blank; every cell has its own hover.
-    """
-    th = THEMES[theme]
-    days, hours, mean, count = data["weekdays"], data["hours"], data["mean"], data["count"]
-    values = [v for row in mean for v in row if v is not None]
-    if not values:
-        return empty_figure("Not enough data yet for the weekly pattern", theme)
-
-    text = []
-    for day, row_mean, row_n in zip(days, mean, count, strict=True):
-        cells = []
-        for h, v, n in zip(hours, row_mean, row_n, strict=True):
-            when = f"{day} {h:02d}:00–{(h + 1) % 24:02d}:00"
-            cells.append(
-                f"{when} · no data" if v is None else f"{when} · <b>{v:,} ppm</b> mean (n={n:,})"
-            )
-        text.append(cells)
-    ramp = th["sequential"]
-    fig = go.Figure(
-        go.Heatmap(
-            x=hours,
-            y=days,
-            z=mean,
-            text=text,
-            hovertemplate="%{text}<extra></extra>",
-            hoverongaps=True,
-            colorscale=[[i / (len(ramp) - 1), c] for i, c in enumerate(ramp)],
-            zmin=400,
-            zmax=max(1400, max(values)),
-            xgap=2,
-            ygap=2,
-            colorbar={
-                "title": {"text": "ppm", "font": {"size": 11, "color": th["muted"]}},
-                "thickness": 8,
-                "outlinewidth": 0,
-                "tickfont": {"size": 10, "color": th["muted"]},
-                "ticks": "",
-                "nticks": 5,
-                "separatethousands": True,
-                "xpad": 12,
-            },
-        )
-    )
-    axis = {
-        "showgrid": False,
-        "zeroline": False,
-        "showline": False,
-        "ticks": "",
-        "fixedrange": True,
-    }
-    fig.update_xaxes(
-        **axis,
-        tickvals=list(range(0, 24, 3)),
-        ticktext=[f"{h:02d}" for h in range(0, 24, 3)],
-        tickfont={"color": th["muted"], "size": 11},
-    )
-    fig.update_yaxes(**axis, autorange="reversed", tickfont={"color": th["ink2"], "size": 11})
-    fig.update_layout(
-        height=260,
-        # l + card padding lines the plot up with the chart card above (8 + 56 = 16 + 48).
-        margin={"l": 48, "r": 16, "t": 8, "b": 22},
-        paper_bgcolor=th["surface"],
-        plot_bgcolor=th["surface"],  # shows through the cell gaps
-        font={"family": 'system-ui, -apple-system, "Segoe UI", sans-serif', "color": th["ink"]},
-        hoverlabel={
-            "bgcolor": th["surface"],
-            "bordercolor": th["axis"],
-            "font": {"color": th["ink"], "size": 12},
-        },
-        uirevision="heatmap",
-    )
-    return fig
 
 
 def sparkline(values: list[float | None], color: str, theme: str = "light") -> go.Figure:

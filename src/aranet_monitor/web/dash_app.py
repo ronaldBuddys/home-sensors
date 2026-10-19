@@ -12,7 +12,7 @@ import dash
 from dash import ClientsideFunction, Input, Output, State, ctx, dcc, html, no_update
 
 from aranet_monitor.config import Settings
-from aranet_monitor.db.queries import MAX_SPAN_S, RANGES, Queries, recent_hours
+from aranet_monitor.db.queries import MAX_SPAN_S, RANGES, Queries
 from aranet_monitor.web import figures
 
 ASSETS = Path(__file__).parent / "assets"
@@ -21,7 +21,6 @@ DEFAULT_PRESET = "24h"
 # ~1 point per 2 px of chart width. Also picks daily buckets for 1 y (finer buckets alias the
 # day/night CO₂ cycle into a solid block) and 15 min for 7 d.
 CHART_POINTS = 700
-HEATMAP_DAYS = 28  # weekly-pattern card: four of each weekday
 GRAPH_CONFIG = {
     "displaylogo": False,
     "responsive": True,
@@ -111,7 +110,6 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
                 dcc.Store(id="theme", storage_type="local"),
                 dcc.Store(id="latest-ts"),
                 dcc.Store(id="window", data={"preset": DEFAULT_PRESET}),
-                dcc.Store(id="zoom-req"),
                 dcc.Interval(id="poll", interval=settings.refresh_s * 1000),
                 dcc.Interval(id="tick", interval=5000),
                 html.Header(
@@ -189,21 +187,6 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
                                     "double-click to reset · shaded band = min–max within each "
                                     "time bucket",
                                     className="hint",
-                                ),
-                            ],
-                        ),
-                        html.Section(
-                            className="card heatmap-card",
-                            children=[
-                                html.H2("When is CO₂ highest?"),
-                                html.P(
-                                    "Mean CO₂ by weekday and hour, last 4 weeks (local time)",
-                                    className="caption",
-                                ),
-                                dcc.Graph(
-                                    id="heatmap",
-                                    config={"displayModeBar": False},
-                                    figure=figures.empty_figure("Loading…"),
                                 ),
                             ],
                         ),
@@ -363,17 +346,6 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
         return tiles
 
     # ---------------------------------------------------------------- window selection
-    # Only user zooms/resets reach the server. Dash drops the in-flight request of a callback
-    # that fires again, and Plotly also sends relayouts of its own ({"autosize": true} after
-    # the first draw), which used to cancel a preset click (#25). Filtering in the browser
-    # keeps every real choice on choose_window, so the newest of them always wins.
-    app.clientside_callback(
-        ClientsideFunction("aranet", "zoomRequest"),
-        Output("zoom-req", "data"),
-        Input("chart", "relayoutData"),
-        prevent_initial_call=True,
-    )
-
     @app.callback(
         Output("window", "data"),
         Output("preset", "value"),
@@ -382,12 +354,12 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
         Input("preset", "value"),
         Input("dates", "start_date"),
         Input("dates", "end_date"),
-        Input("zoom-req", "data"),
+        Input("chart", "relayoutData"),
         Input("device", "value"),
         State("window", "data"),
         prevent_initial_call=True,
     )
-    def choose_window(preset, d0, d1, zoom, _device, window):
+    def choose_window(preset, d0, d1, relayout, _device, window):
         trig = ctx.triggered_id
         if trig == "device":
             # A zoomed/custom window belongs to the previous device; go back to a live preset.
@@ -404,8 +376,8 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
             if not d0 and not d1:
                 return {"preset": DEFAULT_PRESET}, DEFAULT_PRESET, no_update, no_update
             return no_update, no_update, no_update, no_update
-        if trig == "zoom-req":
-            parsed = _parse_relayout((zoom or {}).get("relayout"))
+        if trig == "chart":
+            parsed = _parse_relayout(relayout)
             if parsed == "reset":
                 if not window.get("zoom"):
                     return no_update, no_update, no_update, no_update  # nothing to undo
@@ -478,22 +450,6 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
         res = "raw" if s.bucket_s == 0 else f"{_human(s.bucket_s)} averages"
         label = f"{_when(start, tz)} → {_when(end, tz)} · {res}"
         return fig, _summary_table(st), csv, label
-
-    # ---------------------------------------------------------------- weekly pattern
-    # Independent of the chart window. latest-ts only changes when a new reading lands, so the
-    # card refreshes at the poll rate without redrawing (and dropping the hover) in between.
-    @app.callback(
-        Output("heatmap", "figure"),
-        Input("latest-ts", "data"),
-        Input("theme", "data"),
-    )
-    def heatmap(latest_info, theme):
-        theme = theme if theme in figures.THEMES else "light"
-        if not latest_info or latest_info.get("ts") is None:
-            return figures.empty_figure("No readings yet", theme)
-        start, end = recent_hours(HEATMAP_DAYS)
-        data = queries.co2_heatmap(latest_info["device"], start, end, tz)
-        return figures.co2_heatmap_figure(data, theme)
 
     # ---------------------------------------------------------------- events
     @app.callback(Output("events", "children"), Input("latest-ts", "data"))
