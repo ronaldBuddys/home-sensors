@@ -349,6 +349,20 @@ def test_stop_during_clock_wait_ends_run(store, engine, monkeypatch):
 
     asyncio.run(go())
     assert not FakeScanner.instances
+    assert "stop" in _event_kinds(engine)
+
+
+def test_clock_wait_is_bounded_by_the_limit(store, engine, monkeypatch):
+    monkeypatch.setattr(Collector, "CLOCK_POLL_S", 0.7)
+    c = _clock_collector(store, lambda: False, wait_clock_sync_s=1)
+
+    async def go():
+        t0 = time.monotonic()
+        await c._wait_for_clock()
+        return time.monotonic() - t0
+
+    assert asyncio.run(go()) < 1.3
+    assert "clock_unsynced" in _event_kinds(engine)
 
 
 def test_unknown_clock_state_does_not_wait(store, engine):

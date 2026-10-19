@@ -411,7 +411,10 @@ class Collector:
                 )
                 return
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self._stop.wait(), self.CLOCK_POLL_S)
+                await asyncio.wait_for(
+                    self._stop.wait(),
+                    min(self.CLOCK_POLL_S, max(0.0, deadline - time.monotonic())),
+                )
             if self._stop.is_set():
                 return
             if await asyncio.to_thread(self._clock_probe):
@@ -435,13 +438,16 @@ class Collector:
                 "ARANET_DEVICES is not set: accepting adverts from any Aranet device; new "
                 "devices are not backfilled automatically (use `aranet backfill ADDR`)"
             )
-        if self.settings.wait_clock_sync_s > 0:
-            await self._wait_for_clock()
-        if self._stop.is_set():
-            return
-        await self._start_scanner()
-        tasks = [asyncio.create_task(self._consume()), asyncio.create_task(self._watchdog())]
+        tasks: list[asyncio.Task] = []
         try:
+            if self.settings.wait_clock_sync_s > 0:
+                await self._wait_for_clock()
+            if not self._stop.is_set():
+                await self._start_scanner()
+                tasks = [
+                    asyncio.create_task(self._consume()),
+                    asyncio.create_task(self._watchdog()),
+                ]
             await self._stop.wait()
         finally:
             self._stop.set()
