@@ -54,9 +54,9 @@ uv run aranet backfill AA:BB:CC:DD:EE:FF --last 10
 **After the first pairing, import the history recorded before the collector existed.** Automatic gap detection only fills gaps *after* the newest stored reading, so the ~3.5 days (5,040 records) held on the sensor before your first stored row has to be fetched once by hand. Stop the collector for this one-off, to avoid connect-while-scanning; the short gap while it's stopped is backfilled automatically when it restarts:
 
 ```bash
-./scripts/devctl.sh stop collector          # or: systemctl --user stop aranet-collector
+systemctl --user stop aranet-collector
 uv run aranet backfill AA:BB:CC:DD:EE:FF --all    # ~5040 records, 1-3 min; resumable
-./scripts/devctl.sh start collector         # or: systemctl --user start aranet-collector
+systemctl --user start aranet-collector
 ```
 
 If a download fails partway (weak signal), just run `aranet backfill AA:BB:CC:DD:EE:FF`, without `--all`. It resumes from the first gap in the stored data, and rows already stored are never duplicated. A USB extension cable that brings the dongle closer to the sensor makes downloads much more reliable.
@@ -79,7 +79,7 @@ Both units read `.env` from the repo root (python-dotenv searches upward from th
 
 The units are sandboxed: no privilege escalation, only Unix/IP sockets, a read-only view of the filesystem except `data/`, a private `/tmp`, and `UMask=0077`. This was checked on systemd 249: BLE scanning over the system D-Bus and Postgres both work. `PrivateUsers=yes` (a user namespace) is what makes the filesystem rules take effect in a *user* unit; if a host refuses user namespaces, remove the `PrivateUsers`, `ProtectSystem`, `ProtectHome` and `PrivateTmp` lines. After editing the unit templates, re-run the install script; it reinstalls the units and restarts both services. The script also sets `.env` to `600` and `data/` to `700`, because `.env` holds the DB and web passwords.
 
-For development without systemd, use `./scripts/devctl.sh start|stop|status [collector|web|web-sim]`. It works from pid files. Logs go to `data/*.log` and are rotated to `.log.1` on start once they pass 5 MB.
+For development without systemd, run `uv run aranet collect` and `uv run aranet serve` in a terminal.
 
 ## 5. Postgres
 
@@ -174,8 +174,6 @@ uv run aranet copy-db --source sqlite:///data/aranet.sqlite  # target = the conf
 Then restart the collector and web app; both read `.env` at start-up:
 
 ```bash
-./scripts/devctl.sh restart collector && ./scripts/devctl.sh restart web
-# or, once installed as services:
 systemctl --user restart aranet-collector aranet-web
 ```
 
