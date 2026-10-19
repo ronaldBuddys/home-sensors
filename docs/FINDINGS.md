@@ -1,6 +1,6 @@
-# Findings
+# Engineering notes
 
-These are useful facts I discovered while building this project, kept for future development. They're grouped by topic, and the newest findings are added at the end of each section.
+Facts about the hardware, the Bluetooth protocol, the libraries and performance, learned while building and running this project. They are grouped by topic.
 
 ## Hardware and host
 
@@ -11,7 +11,7 @@ These are useful facts I discovered while building this project, kept for future
 ## Aranet4 BLE advertisements (passive mode)
 
 - **Format:** the sensor advertises manufacturer data for company id **`0x0702`** (SAF Tehnika) plus service UUID `0xFCE0`.
-- **Smart Home integrations.** When this is enabled in the Aranet Home app (flag bit 5 of byte 0), the 22-byte payload carries the full current reading. Here it was already enabled.
+- **Smart Home integrations.** When this is enabled in the Aranet Home app (flag bit 5 of byte 0), the 22-byte payload carries the full current reading.
 - **Layout for Aranet4.** The library prepends a 0 byte; offsets below are into the raw 22 bytes.
 
   | Bytes | Field |
@@ -29,12 +29,12 @@ These are useful facts I discovered while building this project, kept for future
   | `[19..20]` | seconds since last measurement (`ago`) |
   | `[21]` | rolling **counter** |
 
-- **Counter.** It **increments by exactly 1 per logged measurement**; I observed 77 → 78 → 79 → 80 at 60 s intervals. `aranet4` 2.6.0 does **not** decode it for Aranet4 (its struct stops at byte 20), so `ble/parse.py` reads `raw[21]` itself.
+- **Counter.** It **increments by exactly 1 per logged measurement**; observed 77 → 78 → 79 → 80 at 60 s intervals. `aranet4` 2.6.0 does **not** decode it for Aranet4 (its struct stops at byte 20), so `ble/parse.py` reads `raw[21]` itself.
   - **Not used for dedupe.** The measurement timestamp alone (re-adverts are within ±1 s) is a sufficient and safer "is this new?" test. Relying on an undocumented byte could silently drop every reading on firmware that doesn't increment it, and it wraps at 256.
 - **Advert cadence.** BlueZ delivered an advert roughly every **3–13 s** (27 in 300 s at RSSI around −84 dBm). The same measurement is re-advertised about 5–6 times with increasing `ago`.
 - **Measurement time.** `now − ago` is stable to within **±1 s** across re-adverts. That jitter is why dedupe uses a ±interval/2 window rather than exact timestamp equality.
-- **Firmware string.** The advert's version bytes decode (via the library) to `v2.0.12`. This still needs confirming against GATT `SW_REV` once the device is paired.
-- **Battery.** The sensor reported **28 %**. Passive collection makes **no connections**, so it adds zero battery cost. GATT connections are kept to start-up and gap backfills.
+- **Firmware string.** The advert's version bytes decode (via the library) to `v2.0.12`. Not yet cross-checked against the GATT `SW_REV` characteristic.
+- **Battery.** Passive collection makes **no connections**, so it adds zero battery cost. GATT connections are kept to start-up and gap backfills.
 - **Temperature precision.** Raw resolution is 0.05 °C, but `aranet4` rounds to 0.1 °C. For example, raw 443 is 22.15 °C, stored as 22.2.
 
 ## GATT / history download
@@ -49,7 +49,6 @@ These are useful facts I discovered while building this project, kept for future
 - **Real-device numbers.** A full 5,040-record download took 135 s with 9 recovered link drops and 2 ring shifts. The gap-only re-run took 36 s with 1 drop.
 - **`aranet backfill ADDR` default.** It now starts at the *first gap* in stored data within the device's horizon (`Store.first_gap_start`), so a re-run only fetches what's missing. `--all` re-reads everything.
 - **Pairing.** It worked with `bluetoothctl` (`agent KeyboardOnly`, then `pair` and `trust`). `--last 10` succeeded straight after pairing.
-
 
 - **Pairing is required.** Connecting without pairing fails during service discovery (`failed to discover services, device disconnected` or `GATT Protocol Error: Unlikely Error`). `bluetoothd` logs `new_auth() No agent available for request type 2`, which means the sensor requests **passkey authentication**. This is a one-time pairing step where you enter the PIN shown on the Aranet's display; see `docs/DEPLOYMENT.md`.
 - **`get_all_records()` bug in aranet4 2.6.0.** It returns an **empty** history for Aranet4. Its model check only handles names starting with `Aranet2`, `Aranet☢` and `AranetRn`; everything else, including `Aranet4…`, is treated as "unknown model" and returns early. `ble/history.py` therefore drives `Aranet4.get_records()` directly.
@@ -94,19 +93,23 @@ These are useful facts I discovered while building this project, kept for future
   - Switching presets: about 0.35 s.
 - **Rejected optimisation.** A Plotly *cartesian* partial bundle (about 0.4 MB gzipped) would cut the cold load. However, Dash registers plotly.js through the private `Dash._setup_plotlyjs()`, so swapping it means patching Dash internals. Not worth it, given the warm-cache numbers; revisit if the dashboard is served to slow mobile clients.
 
-## Review findings (independent code review, 2026-10-14)
+## Bugs found in review
 
-An independent review agent found these; all are fixed with regression tests unless noted.
+Each of these was fixed with a regression test.
 
 - **Mid-download shift.** If the sensor logs a point during a multi-parameter history download, the per-parameter columns shift relative to each other. When the log is full this silently mis-pairs values; when it isn't full the library raises `IndexError`. Fix: re-read `total`/`ago` after the download and retry.
 - **Copying with the current interval.** `copy_db` window-deduplicated old 60 s data using the device's *current* interval (600 s), turning 1440 rows into 288. It now uses insert-or-ignore on the primary key.
 - **Scanner leak on shutdown.** Stopping during a backfill left a scanner running, because the backfill's `finally` restarted it. Shutdown now cancels backfill tasks and never restarts the scanner while stopping.
-- **Gaps that were never healed:**
-  - points missed while the scanner was paused
-  - a failed start-up backfill
-  - a backfill skipped during cooldown
+- **Gaps that were never healed.** Three cases were missed:
+  - points missed while the scanner was paused;
+  - a failed start-up backfill;
+  - a backfill skipped during cooldown.
 
-  Gap detection is now based on measurement timestamps, and pending gaps persist across failures (with exponential back-off).
-- **Double-click reset.** Double-clicking an unzoomed 7 d or custom view jumped to 24 h. Now it only undoes a zoom.
+  Gap detection is now based on measurement timestamps, and pending gaps persist across failures, with exponential back-off.
 - **Thresholds ignored long intervals.** The stale and gap thresholds ignored the device interval, which mattered at 600 s logging. Both now scale with the interval.
-- **DST fall-back** renders the repeated hour doubled back. This is documented, not fixed; see ROADMAP.
+- **The DST fall-back drew backwards.** Plotly has no time-zone-aware axis, so local time is drawn naive. On the night clocks go back, the repeated hour was drawn as a stroke running backwards. The figure now breaks the line wherever x goes backwards.
+- **Min–max envelopes bridged gaps.** Plotly's `fill="tonexty"` ignores `None` gaps: the first segment's wash vanished and a wedge was drawn across the gap. The envelope is now one closed `fill="toself"` polygon per contiguous segment.
+- **A preset click could be silently lost.** dash-renderer keeps only the **newest** request when a callback is re-triggered while a request is in flight, and discards the older response. Plotly emits an `{"autosize": true}` relayout about 200 ms after the first draw. Because the window callback also listened to `relayoutData`, that autosize could cancel a preset click: the button showed 30 d while the chart stayed on 24 h.
+  - **Fix:** relayouts are filtered in the browser, so only real zooms and resets reach the server, and one callback owns the chart window.
+  - **Lesson:** never let a framework-generated event share a callback with user input whose response must not be dropped.
+  - **How it was found:** it showed up only as a flaky end-to-end test on CI runners. It was reproduced locally by holding requests with Playwright's `page.route`.

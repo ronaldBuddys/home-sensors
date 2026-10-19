@@ -13,7 +13,7 @@ from aranet_monitor.db.queries import Series
 # Sequential blue ramp, steps 100-700 every other step (dataviz palette), light -> dark.
 _BLUE_RAMP = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
 
-# Reference palette (dataviz skill, references/palette.md). Categorical slots in fixed order.
+# Palette validated for colour-vision deficiency. Categorical slots are used in fixed order.
 THEMES = {
     "light": {
         "surface": "#fcfcfb",
