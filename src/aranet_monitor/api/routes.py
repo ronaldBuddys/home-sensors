@@ -37,11 +37,9 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 Epoch = Annotated[int | None, Query(ge=0, le=2**32, description="epoch seconds")]
 
 
-def resolve_window(
-    range_: str | None, start: int | None, end: int | None, now: int | None = None
-) -> tuple[int, int]:
+def resolve_window(range_: str | None, start: int | None, end: int | None) -> tuple[int, int]:
     """Turn ``range=24h`` or explicit ``start``/``end`` epoch seconds into a window."""
-    now = now or int(time.time())
+    now = int(time.time())
     end = end if end is not None else now
     if start is None:
         span = RANGES.get(range_ or "24h")

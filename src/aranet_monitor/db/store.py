@@ -17,6 +17,7 @@ from aranet_monitor.db.schema import devices, events, metadata, readings, readin
 from aranet_monitor.models import METRICS, DeviceInfo, Reading
 
 DEFAULT_INTERVAL_S = 60
+COPY_CHUNK = 10_000
 
 
 def make_engine(db_url: str, *, schema: str | None = None, read_only: bool = False) -> Engine:
@@ -226,10 +227,10 @@ class Store:
                     refresh_rollup(conn, device_id, start, min(hi, start + step - 1))
         return n
 
-    def rebuild_rollup(self, device_id: int | None = None) -> int:
+    def rebuild_rollup(self) -> int:
         """Recompute the hourly rollup from raw readings; returns hours written."""
         with self.engine.begin() as conn:
-            return rebuild_rollup(conn, device_id)
+            return rebuild_rollup(conn)
 
     def first_gap_start(
         self, device_id: int, interval_s: int, since: int | None = None
@@ -275,7 +276,6 @@ def _count_rows(engine: Engine, device_id: int) -> int:
 def copy_db(
     source_url: str,
     target_url: str,
-    chunk: int = 10_000,
     source_schema: str | None = None,
     target_schema: str | None = None,
 ) -> dict[str, int]:
@@ -312,9 +312,9 @@ def copy_db(
         before = _count_rows(dst, new_id)
         rows = (
             Reading(d["address"], int(ts), source, **dict(zip(METRICS, vals, strict=True)))
-            for ts, source, *vals in q.iter_rows(d["id"], 0, 2**62, chunk=chunk)
+            for ts, source, *vals in q.iter_rows(d["id"], 0, 2**62, chunk=COPY_CHUNK)
         )
-        out.bulk_insert_raw(new_id, rows, chunk=chunk)
+        out.bulk_insert_raw(new_id, rows, chunk=COPY_CHUNK)
         counts["readings"] += _count_rows(dst, new_id) - before
 
     with dst.connect() as conn:
