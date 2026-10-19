@@ -81,10 +81,13 @@ def test_fall_back_hour_has_no_backward_segment():
         fig = figures.timeseries_figure(s, tz=tz)
         assert len(s.t) == n_t and s.mean["co2"] == co2
         for tr in fig.data:
-            pts = [(x, y) for x, y in zip(tr.x, tr.y, strict=True)]
-            for (x0, y0), (x1, y1) in zip(pts, pts[1:], strict=False):
-                if y0 is not None and y1 is not None:
-                    assert x1 >= x0, (bucket, x0, x1)
+            paths = [list(zip(tr.x, tr.y, strict=True))]
+            if tr.fill:  # polygons close by retracing; only the outbound (hi) half is a path
+                paths = [piece[: len(piece) // 2] for piece in _pieces(tr.y, tr.x)]
+            for pts in paths:
+                for (x0, y0), (x1, y1) in zip(pts, pts[1:], strict=False):
+                    if y0 is not None and y1 is not None:
+                        assert x1 >= x0, (bucket, x0, x1)
         mean = [tr for tr in fig.data if tr.name == "CO₂"][0]
         assert len(mean.x) == 17
         assert sum(y is None for y in mean.y) == 1
