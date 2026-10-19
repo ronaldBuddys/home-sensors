@@ -98,7 +98,7 @@ The same SQLAlchemy Core code runs on **SQLite and Postgres**, and CI tests both
   - CO₂ threshold bands;
   - range presets from 1 h to 1 y, plus custom dates;
   - drag-to-zoom reloads finer data.
-- **The answer to "when do I need to ventilate?"** A weekday × hour heatmap of mean CO₂:
+- **The answer to "when do I need to ventilate?"** A weekday × hour heatmap of mean CO₂, coloured by the CO₂ thresholds (green, amber at "elevated", red at "high"):
 
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/heatmap-dark.png">
