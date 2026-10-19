@@ -174,3 +174,23 @@ def test_web_uses_its_own_db_login():
     )
     assert Settings(db_url="sqlite:///x.sqlite").web_db_url == "sqlite:///x.sqlite"
     assert "ro-pw" not in repr(s)
+
+
+def test_co2_heatmap_endpoint(client):
+    r = client.get("/api/v1/devices/1/co2-heatmap?days=28")
+    assert r.status_code == 200
+    hm = r.json()
+    assert hm["device_id"] == 1 and hm["tz"] == "local"
+    assert hm["end"] - hm["start"] == 28 * 86400 and hm["end"] % 3600 == 0
+    assert hm["weekdays"][0] == "Mon" and hm["hours"] == list(range(24))
+    assert len(hm["mean"]) == 7 and all(len(row) == 24 for row in hm["mean"])
+    assert len(hm["count"]) == 7 and all(len(row) == 24 for row in hm["count"])
+    cells = [v for row in hm["mean"] for v in row if v is not None]
+    assert cells and all(400 <= v < 5000 for v in cells)
+    default = client.get("/api/v1/devices/1/co2-heatmap").json()
+    assert default["end"] - default["start"] == 28 * 86400
+    assert client.get("/api/v1/devices/1/co2-heatmap?days=0").status_code == 422
+    assert client.get("/api/v1/devices/1/co2-heatmap?days=366").status_code == 422
+    assert client.get("/api/v1/devices/99/co2-heatmap").status_code == 404
+    schema = client.get("/api/openapi.json").json()["components"]["schemas"]["Co2Heatmap"]
+    assert schema["properties"]["mean"]["description"]

@@ -6,9 +6,9 @@ import math
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 
-from sqlalchemy import Engine, and_, case, func, select
+from sqlalchemy import BigInteger, Engine, Select, and_, bindparam, case, func, select
 
 from aranet_monitor.db.schema import (
     CO2_LEVELS,
@@ -49,6 +49,9 @@ RANGES: dict[str, int] = {
 }
 STATS_METRICS = ("co2", "temperature", "humidity", "pressure")  # min/mean/max in stats()
 MAX_SPAN_S = 2 * 366 * 86400  # longest window one request may scan (CSV export: page by year)
+HOUR = 3600
+WEEK_HOURS = 168
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 
 def pick_bucket(span_s: int, max_points: int, raw_interval_s: int = 60) -> int:
@@ -98,6 +101,85 @@ def _validate_metrics(metrics: Sequence[str] | None) -> list[str]:
 
 def _round(v, nd: int = 2):
     return None if v is None else round(float(v), nd)
+
+
+def recent_hours(days: int, now: int | None = None) -> tuple[int, int]:
+    """Hour-aligned ``[start, end)`` covering the last ``days`` days up to the current hour.
+
+    ``end`` is the end of the hour in progress, so the window holds exactly ``days * 24``
+    rollup hours, including the partial current one.
+    """
+    now = int(time.time()) if now is None else now
+    end = now - now % HOUR + HOUR
+    return end - days * 86400, end
+
+
+def _utc_offset(t: int, tz: tzinfo | None) -> int:
+    """UTC offset (seconds) of ``tz`` at epoch ``t``; ``None`` means the system local zone."""
+    dt = datetime.fromtimestamp(t, tz) if tz is not None else datetime.fromtimestamp(t).astimezone()
+    return int(dt.utcoffset().total_seconds())
+
+
+def _offset_segments(start: int, end: int, tz: tzinfo | None) -> list[tuple[int, int, int]]:
+    """Split the hours of ``[start, end)`` into runs of constant UTC offset.
+
+    Parameters
+    ----------
+    start, end
+        Epoch seconds; ``start`` is snapped down to the hour.
+    tz
+        Display time zone (``None`` = system local).
+
+    Returns
+    -------
+    list of (seg_start, seg_end, offset_s)
+        Half-open, hour-aligned segments (the last one ends at ``end``). The window is probed
+        a day at a time and bisected by hour inside a day whose offset changes, so a year
+        costs ~370 offset lookups however many DST changes it holds.
+    """
+    t = start - start % HOUR
+    if t >= end:
+        return []
+    last = (end - 1) - (end - 1) % HOUR  # last hour that starts inside the window
+    seg_start, off = t, _utc_offset(t, tz)
+    segments = []
+    while t < last:
+        probe = min(t + 86400, last)
+        if _utc_offset(probe, tz) == off:
+            t = probe
+            continue
+        lo, hi = t, probe  # offset(lo) == off != offset(hi); find the first changed hour
+        while hi - lo > HOUR:
+            mid = lo + (hi - lo) // 2 // HOUR * HOUR
+            if _utc_offset(mid, tz) == off:
+                lo = mid
+            else:
+                hi = mid
+        segments.append((seg_start, hi, off))
+        seg_start, off, t = hi, _utc_offset(hi, tz), hi
+    segments.append((seg_start, end, off))
+    return segments
+
+
+def _heatmap_stmt(device_id: int, seg_start: int, seg_end: int, offset_s: int) -> Select:
+    """Grouped CO₂ sums per local hour-of-week for one constant-offset segment.
+
+    ``k = ((hour + offset) // 3600) % 168`` is the local hour of the week, ``k = 0`` being
+    Thursday 00:00 (the Unix epoch was a Thursday). Integer ``//`` and ``%`` render the same on
+    SQLite and Postgres, and the offset is a bound parameter, so one statement serves both.
+    """
+    h = readings_hourly.c
+    k = ((h.hour + bindparam("utc_offset", offset_s, BigInteger)) // HOUR) % WEEK_HOURS
+    return (
+        select(k.label("k"), func.sum(h.co2_sum).label("co2_sum"), func.sum(h.co2_cnt).label("n"))
+        .where(
+            h.device_id == device_id,
+            h.hour >= seg_start,
+            h.hour < seg_end,
+            h.co2_cnt > 0,
+        )
+        .group_by(k)
+    )
 
 
 class Queries:
@@ -336,6 +418,48 @@ class Queries:
         with self.engine.connect() as conn:
             row = conn.execute(select(*cols).where(where)).mappings().first()
         return self._finish_stats(dict(row))
+
+    # ------------------------------------------------------------------ weekly pattern
+    def co2_heatmap(self, device_id: int, start: int, end: int, tz: tzinfo | None) -> dict:
+        """Mean CO₂ for each (local weekday, local hour) over the rollup hours in a window.
+
+        Parameters
+        ----------
+        device_id
+            Device to summarise.
+        start, end
+            Window in epoch seconds: rollup hours from ``start`` (snapped down to the hour) up
+            to, but excluding, ``end``.
+        tz
+            Display time zone; ``None`` = system local. Hours are bucketed by local wall-clock
+            time, so 14:30 lands in hour 14 in winter and in summer. In zones with a
+            non-whole-hour offset each UTC hour goes to the local hour it starts in.
+
+        Returns
+        -------
+        dict
+            ``weekdays`` (Mon..Sun), ``hours`` (0..23), and 7 × 24 lists (row = weekday,
+            column = hour): ``mean`` (ppm rounded to int, ``None`` without data) and
+            ``count`` (number of readings). Means are re-aggregated exactly as
+            ``Σ co2_sum / Σ co2_cnt`` across the hours (and DST segments) of each cell.
+        """
+        sums = [0.0] * WEEK_HOURS
+        counts = [0] * WEEK_HOURS
+        with self.engine.connect() as conn:
+            for seg_start, seg_end, offset in _offset_segments(start, end, tz):
+                for k, total, n in conn.execute(
+                    _heatmap_stmt(device_id, seg_start, seg_end, offset)
+                ):
+                    sums[int(k)] += float(total)
+                    counts[int(k)] += int(n)
+        mean = [[None] * 24 for _ in WEEKDAYS]
+        count = [[0] * 24 for _ in WEEKDAYS]
+        for k in range(WEEK_HOURS):
+            day, hour = (k // 24 + 3) % 7, k % 24  # k = 0 is Thursday 00:00
+            count[day][hour] = counts[k]
+            if counts[k]:
+                mean[day][hour] = round(sums[k] / counts[k])
+        return {"weekdays": list(WEEKDAYS), "hours": list(range(24)), "mean": mean, "count": count}
 
     # ------------------------------------------------------------------ export
     def iter_csv(self, device_id: int, start: int, end: int) -> Iterator[list]:

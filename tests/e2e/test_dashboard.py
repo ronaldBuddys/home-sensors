@@ -87,6 +87,15 @@ def test_initial_render(page):
     assert page.locator("table.summary tbody tr").count() == 4
 
 
+def test_heatmap_card_renders(page):
+    page.wait_for_selector("#heatmap .main-svg .hm image", timeout=10000)
+    card = page.locator(".card:has(#heatmap)")
+    assert "When is CO₂ highest?" in card.inner_text()
+    ticks = page.locator("#heatmap .ytick text")
+    y = {ticks.nth(i).text_content(): ticks.nth(i).bounding_box()["y"] for i in range(7)}
+    assert y["Mon"] < y["Tue"] < y["Sun"]  # Monday on top
+
+
 def test_presets_change_resolution(page):
     page.click("#preset label:has-text('30d')")
     page.wait_for_function(
