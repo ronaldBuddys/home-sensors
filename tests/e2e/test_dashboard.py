@@ -1,5 +1,7 @@
 """Browser tests (headless Chrome via Playwright). Run: uv run --group e2e pytest -m e2e"""
 
+import json
+import re
 import socket
 import threading
 import time
@@ -92,6 +94,43 @@ def test_presets_change_resolution(page):
     )
     page.click("#preset label:has-text('1h')")
     page.wait_for_function("document.querySelector('#window-label').innerText.includes('raw')")
+
+
+def _changed(request) -> list[str]:
+    return json.loads(request.post_data or "{}").get("changedPropIds", [])
+
+
+def test_preset_survives_relayout_mid_request(page):
+    # #25: any chart relayout, e.g. Plotly's own {"autosize": true} after the first draw,
+    # used to re-run the preset callback while the click's request was in flight; Dash kept
+    # only the newer request, so the click was lost. Hold the click's request until a relayout
+    # has been sent, then release it: the preset must still win. Slow CPU as on a Pi 3.
+    # The relayout is the Pan button: a repeated autosize may leave relayoutData unchanged,
+    # and Dash only fires callbacks for props that change.
+    cdp = page.context.new_cdp_session(page)
+    cdp.send("Emulation.setCPUThrottlingRate", {"rate": 4})
+    held = []
+
+    def hold(route, request):
+        if "preset.value" in _changed(request) and not held:
+            held.append(route)
+        else:
+            route.continue_()
+
+    page.route(re.compile(r"/_dash-update-component"), hold)
+    with page.expect_request(lambda r: "preset.value" in _changed(r)):
+        page.click("#preset label:has-text('30d')")
+    with page.expect_request(lambda r: "chart.relayoutData" in _changed(r)):
+        page.click("#chart .modebar-btn[data-title='Pan']")
+    held[0].continue_()
+    page.wait_for_function(
+        "document.querySelector('#window-label').innerText.includes('2 h averages')",
+        timeout=10000,
+    )
+    page.click("#preset label:has-text('1h')")
+    page.wait_for_function(
+        "document.querySelector('#window-label').innerText.includes('raw')", timeout=10000
+    )
 
 
 def test_zoom_reloads_detail_and_dblclick_resets(page):
