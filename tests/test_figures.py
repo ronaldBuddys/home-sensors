@@ -151,3 +151,35 @@ def test_envelope_covers_each_segment():
             ys = [p[1] for p in piece]
             assert min(ys) == min(s.lo[metric][i] for i in seg)
             assert max(ys) == max(s.hi[metric][i] for i in seg)
+
+
+def _heatmap_data(fill=None):
+    mean = [[fill(d, h) if fill else None for h in range(24)] for d in range(7)]
+    count = [[0 if v is None else 60 for v in row] for row in mean]
+    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    return {"weekdays": days, "hours": list(range(24)), "mean": mean, "count": count}
+
+
+def test_co2_heatmap_figure():
+    data = _heatmap_data(lambda d, h: None if (d, h) == (6, 3) else 500 + 40 * h + d)
+    fig = figures.co2_heatmap_figure(data)
+    assert [tr.type for tr in fig.data] == ["heatmap"]
+    hm = fig.data[0]
+    assert hm.zmin == 400 and hm.zmax == 1426  # data max (above 1400) sets the top
+    light = figures.THEMES["light"]["sequential"]
+    assert hm.colorscale[0][1].lower() == light[0] and hm.colorscale[-1][1].lower() == light[-1]
+    assert hm.xgap == 2 and hm.ygap == 2
+    assert fig.layout.yaxis.autorange == "reversed" and list(hm.y)[0] == "Mon"
+    assert hm.z[6][3] is None and "no data" in hm.text[6][3]
+    assert "Tue 14:00–15:00" in hm.text[1][14] and "1,061 ppm" in hm.text[1][14]
+
+    dark = figures.co2_heatmap_figure(data, theme="dark").data[0]
+    assert dark.colorscale[0][1].lower() == light[-1] and dark.colorscale[-1][1].lower() == light[0]
+
+
+def test_co2_heatmap_figure_scale_and_empty():
+    calm = figures.co2_heatmap_figure(_heatmap_data(lambda d, h: 600 if h == 9 else 450))
+    assert calm.data[0].zmax == 1400  # a well-ventilated home doesn't fill the ramp
+    empty = figures.co2_heatmap_figure(_heatmap_data())
+    assert not [tr for tr in empty.data if tr.type == "heatmap"]
+    assert "Not enough data" in empty.layout.annotations[0].text

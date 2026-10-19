@@ -8,13 +8,14 @@ import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from aranet_monitor.config import Settings
-from aranet_monitor.db.queries import MAX_SPAN_S, RANGES, Queries
+from aranet_monitor.db.queries import MAX_SPAN_S, RANGES, Queries, recent_hours
 from aranet_monitor.models import UNITS
 
 router = APIRouter(prefix="/api/v1", tags=["aranet"])
@@ -37,11 +38,9 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 Epoch = Annotated[int | None, Query(ge=0, le=2**32, description="epoch seconds")]
 
 
-def resolve_window(
-    range_: str | None, start: int | None, end: int | None, now: int | None = None
-) -> tuple[int, int]:
+def resolve_window(range_: str | None, start: int | None, end: int | None) -> tuple[int, int]:
     """Turn ``range=24h`` or explicit ``start``/``end`` epoch seconds into a window."""
-    now = now or int(time.time())
+    now = int(time.time())
     end = end if end is not None else now
     if start is None:
         span = RANGES.get(range_ or "24h")
@@ -111,6 +110,21 @@ class SeriesOut(BaseModel):
     min: dict[str, list[float | None]]
     max: dict[str, list[float | None]]
     units: dict[str, str]
+
+
+class Co2Heatmap(BaseModel):
+    """Mean CO₂ by local weekday and hour of day (the weekly ventilation pattern)."""
+
+    device_id: int
+    start: int = Field(description="window start, epoch seconds (hour-aligned, inclusive)")
+    end: int = Field(description="window end, epoch seconds (end of the current hour, exclusive)")
+    tz: str = Field(description='time zone used for weekday/hour (IANA name, or "local")')
+    weekdays: list[str] = Field(description="row labels, Mon..Sun")
+    hours: list[int] = Field(description="column labels, local hour of day 0..23")
+    mean: list[list[int | None]] = Field(
+        description="7 × 24 mean CO₂ in ppm (rows = weekdays, columns = hours); null = no data"
+    )
+    count: list[list[int]] = Field(description="7 × 24 number of CO₂ readings per cell")
 
 
 # ---------------------------------------------------------------------- routes
@@ -190,6 +204,26 @@ def stats(
         "co2_warn": settings.co2_warn,
         "co2_alert": settings.co2_alert,
         **q.stats(device_id, start, end, settings.co2_warn, settings.co2_alert),
+    }
+
+
+@router.get("/devices/{device_id}/co2-heatmap", response_model=Co2Heatmap)
+def co2_heatmap(
+    device_id: int,
+    q: QueriesDep,
+    settings: SettingsDep,
+    days: Annotated[int, Query(ge=1, le=365, description="look-back window in days")] = 28,
+) -> dict:
+    """Mean CO₂ per (weekday, hour) in the display time zone: when to ventilate."""
+    _device_or_404(q, device_id)
+    start, end = recent_hours(days)
+    tz = ZoneInfo(settings.display_tz) if settings.display_tz else None
+    return {
+        "device_id": device_id,
+        "start": start,
+        "end": end,
+        "tz": settings.display_tz or "local",
+        **q.co2_heatmap(device_id, start, end, tz),
     }
 
 

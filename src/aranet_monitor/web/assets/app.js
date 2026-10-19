@@ -1,4 +1,5 @@
 // Client-side callbacks: no server round-trip for theme or the "updated N s ago" pill.
+let zoomRequests = 0;
 window.dash_clientside = Object.assign({}, window.dash_clientside, {
   aranet: {
     toggleTheme: function (nClicks, current) {
@@ -24,9 +25,23 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
       else if (age < 172800) txt = Math.round(age / 3600) + " h ago";
       else txt = Math.round(age / 86400) + " d ago";
       // Allow for a missed measurement or two at the device's logging interval.
+      // Keep in sync with db/queries.py Queries.health.
       const staleAfter = Math.max(300, 2.5 * (latest.interval || 60));
       if (age <= staleAfter) return ["● Live · measured " + txt, "pill pill-live"];
       return ["■ Stale · last reading " + txt, "pill pill-stale"];
+    },
+    // Pass on only user zooms (x range) and resets (autorange). Plotly's own relayouts
+    // (autosize, pan/zoom mode) must not reach the server: see choose_window. `n` makes
+    // two identical zooms in a row still count as a change.
+    zoomRequest: function (relayout) {
+      const isZoom = Object.keys(relayout || {}).some(function (k) {
+        return /autorange$/.test(k) || /^xaxis\d*\.range(\[[01]\])?$/.test(k);
+      });
+      if (!isZoom) {
+        return window.dash_clientside.no_update;
+      }
+      zoomRequests += 1;
+      return { relayout: relayout, n: zoomRequests };
     },
   },
 });
