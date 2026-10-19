@@ -179,3 +179,62 @@ def test_settings_wait_clock_sync_from_env(monkeypatch):
     assert Settings().wait_clock_sync_s == 0
     monkeypatch.setenv("ARANET_WAIT_CLOCK_SYNC_S", "120")
     assert Settings.from_env().wait_clock_sync_s == 120
+
+
+def _ts(store, dev):
+    from sqlalchemy import text
+
+    with store.engine.connect() as c:
+        return [
+            r[0]
+            for r in c.execute(
+                text("select ts from readings where device_id=:d order by ts"), {"d": dev}
+            )
+        ]
+
+
+def test_sim_device_seeds_then_tops_up(db, monkeypatch):
+    store = cli._store(db.settings())
+    now = 1_700_000_000
+    monkeypatch.setattr(cli.time, "time", lambda: now)
+    dev, sim = cli._sim_device(store, 60, 0.5)
+    assert store.last_ts(dev) is not None
+    assert abs(len(_ts(store, dev)) - 0.5 * 86400 / 60) <= 2
+    monkeypatch.setattr(cli.time, "time", lambda: now + 3600)
+    dev2, _ = cli._sim_device(store, 60, 0.5)
+    assert dev2 == dev
+    ts = _ts(store, dev)
+    assert abs(len(ts) - (0.5 * 86400 + 3600) / 60) <= 3
+    assert max(b - a for a, b in zip(ts, ts[1:], strict=False)) <= 120
+
+
+def _stub_web(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        cli, "_run_web", lambda settings, host, port: seen.append((settings, host, port))
+    )
+    return seen
+
+
+def test_demo_never_uses_configured_db(db, tmp_path, monkeypatch):
+    monkeypatch.setenv("ARANET_DB_URL", f"sqlite:///{tmp_path}/real.sqlite")
+    monkeypatch.setenv("ARANET_WEB_PASSWORD", "secret")
+    seen = _stub_web(monkeypatch)
+    b = f"sqlite:///{tmp_path}/demo_b.sqlite"
+    assert cli.main(["demo", "--db", b, "--days", "0.01", "--port", "8123"]) == 0
+    settings, host, port = seen[-1]
+    assert settings.db_url == b and settings.web_password is None
+    assert (host, port) == ("127.0.0.1", 8123)
+    assert not (tmp_path / "real.sqlite").exists()
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").mkdir()
+    assert cli.main(["demo", "--days", "0.01"]) == 0
+    assert seen[-1][0].db_url == "sqlite:///data/demo.sqlite"
+    assert (tmp_path / "data" / "demo.sqlite").exists()
+    assert not (tmp_path / "real.sqlite").exists()
+
+
+def test_demo_parser_defaults():
+    args = cli.build_parser().parse_args(["demo"])
+    assert args.days == 30 and args.interval == 60 and args.db is None and args.port is None
