@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import dataclasses
 import json
 import logging
 import sys
+import threading
 import time
 from datetime import datetime
 
@@ -16,6 +18,8 @@ from aranet_monitor.db.store import Store, check_schema, init_db, make_engine
 from aranet_monitor.models import DeviceInfo
 
 log = logging.getLogger("aranet")
+
+DEMO_DB_URL = "sqlite:///data/demo.sqlite"
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -161,10 +165,6 @@ def cmd_backfill(args, settings: Settings) -> int:
 
 def cmd_serve(args, settings: Settings) -> int:
     """Serve the FastAPI app (API + Dash dashboard)."""
-    import uvicorn
-
-    from aranet_monitor.api.app import create_app
-
     host = args.host or settings.web_host
     port = args.port or settings.web_port
     if not settings.web_password and not _is_loopback(host) and not args.allow_no_auth:
@@ -192,6 +192,16 @@ def cmd_serve(args, settings: Settings) -> int:
         _safe_url(settings.web_db_url),
         f", schema {settings.db_schema}" if settings.db_schema else "",
     )
+    _run_web(settings, host, port)
+    return 0
+
+
+def _run_web(settings: Settings, host: str, port: int) -> None:
+    """Run the FastAPI app (API + dashboard) under uvicorn until interrupted."""
+    import uvicorn
+
+    from aranet_monitor.api.app import create_app
+
     uvicorn.run(
         create_app(settings),
         host=host,
@@ -200,21 +210,31 @@ def cmd_serve(args, settings: Settings) -> int:
         ssl_certfile=settings.web_tls_cert,
         ssl_keyfile=settings.web_tls_key,
     )
-    return 0
+
+
+def _sim_device(store: Store, interval_s: int, history_days: float):
+    """Upsert the simulated device; seed it, or top it up if its data is stale."""
+    from aranet_monitor.sim.simulator import SIM_NAME, Aranet4Simulator
+
+    sim = Aranet4Simulator(interval_s=interval_s)
+    dev = store.upsert_device(DeviceInfo(sim.address, SIM_NAME, "Aranet4", "sim", interval_s))
+    now = int(time.time())
+    last = store.last_ts(dev)
+    if last is None:
+        n = store.bulk_insert_raw(dev, sim.generate(now - int(history_days * 86400), now))
+        log.info("seeded %d simulated rows", n)
+    elif now - last > 2 * interval_s:
+        n = store.bulk_insert_raw(dev, sim.generate(last + interval_s, now))
+        log.info("topped up %d simulated rows", n)
+    return dev, sim
 
 
 def cmd_simulate(args, settings: Settings) -> int:
     """Write live synthetic readings (for UI development without a sensor)."""
-    from aranet_monitor.sim.simulator import SIM_NAME, Aranet4Simulator
+    from aranet_monitor.sim.simulator import SIM_NAME
 
     store = _store(settings, args.db)
-    sim = Aranet4Simulator(interval_s=args.interval)
-    dev = store.upsert_device(DeviceInfo(sim.address, SIM_NAME, "Aranet4", "sim", args.interval))
-    now = int(time.time())
-    last = store.last_ts(dev)
-    if last is None:
-        n = store.bulk_insert_raw(dev, sim.generate(now - int(args.history_days * 86400), now))
-        log.info("seeded %d simulated rows", n)
+    dev, sim = _sim_device(store, args.interval, args.history_days)
     log.info("simulating %s every %ss (Ctrl-C to stop)", SIM_NAME, args.interval)
     try:
         while True:
@@ -223,6 +243,45 @@ def cmd_simulate(args, settings: Settings) -> int:
             time.sleep(args.interval)
     except KeyboardInterrupt:
         return 0
+
+
+def cmd_demo(args, settings: Settings) -> int:
+    """Try it without a sensor: simulated data written live + the dashboard."""
+    url = args.db or DEMO_DB_URL
+    demo = dataclasses.replace(
+        settings,
+        db_url=url,
+        db_schema=None,
+        web_db_user=None,
+        web_db_password=None,
+        web_tls_cert=None,
+        web_tls_key=None,
+        web_password=None,
+    )
+    port = args.port or settings.web_port
+    store = _store(demo, url)
+    dev, sim = _sim_device(store, args.interval, args.days)
+    stop = threading.Event()
+
+    def writer() -> None:
+        while not stop.wait(args.interval):
+            try:
+                store.insert_readings(dev, [sim.step(int(time.time()))], args.interval)
+            except Exception:
+                log.exception("demo writer failed; will retry")
+
+    thread = threading.Thread(target=writer, name="demo-writer", daemon=True)
+    thread.start()
+    print(
+        f"Demo dashboard: http://127.0.0.1:{port}/  "
+        f"(simulated sensor, data in {_safe_url(url)}; Ctrl-C to stop)"
+    )
+    try:
+        _run_web(demo, "127.0.0.1", port)
+    finally:
+        stop.set()
+        thread.join(timeout=2)
+    return 0
 
 
 def cmd_seed(args, settings: Settings) -> int:
@@ -398,6 +457,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--interval", type=int, default=60)
     s.add_argument("--history-days", type=float, default=7)
     s.set_defaults(func=cmd_simulate)
+
+    s = sub.add_parser("demo", help="try it without a sensor: simulated data + dashboard")
+    s.add_argument("--db", help=f"DB URL (default: {DEMO_DB_URL}; never ARANET_DB_URL)")
+    s.add_argument("--days", type=float, default=30, help="days of history to seed")
+    s.add_argument("--interval", type=int, default=60)
+    s.add_argument("--port", type=int)
+    s.set_defaults(func=cmd_demo)
 
     s = sub.add_parser("seed", help="generate synthetic history")
     s.add_argument("--db", help="DB URL (default: ARANET_DB_URL). Use a separate DB!")
