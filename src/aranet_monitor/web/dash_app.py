@@ -493,7 +493,9 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
             return figures.empty_figure("No readings yet", theme)
         start, end = recent_hours(HEATMAP_DAYS)
         data = queries.co2_heatmap(latest_info["device"], start, end, tz)
-        return figures.co2_heatmap_figure(data, theme)
+        return figures.co2_heatmap_figure(
+            data, theme, co2_warn=settings.co2_warn, co2_alert=settings.co2_alert
+        )
 
     # ---------------------------------------------------------------- events
     @app.callback(Output("events", "children"), Input("latest-ts", "data"))
