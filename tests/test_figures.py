@@ -1,3 +1,6 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from aranet_monitor.db.queries import Series
 from aranet_monitor.web import figures
 from aranet_monitor.web.dash_app import _parse_relayout, co2_status
@@ -55,3 +58,39 @@ def test_parse_relayout():
         {"xaxis3.range[0]": "2026-01-01 00:00", "xaxis3.range[1]": "2026-01-02"}
     ) == ("2026-01-01 00:00", "2026-01-02")
     assert _parse_relayout({"xaxis.range": ["a", "b"]}) == ("a", "b")
+
+
+def _london_fall_back_series(bucket):
+    tz = ZoneInfo("Europe/London")
+    t0 = int(datetime(2026, 10, 25, 0, 30, tzinfo=tz).timestamp())
+    n = 16
+    t = [t0 + 600 * k for k in range(n)]
+    vals = {
+        "co2": [800 + i for i in range(n)],
+        "temperature": [22.1] * n,
+        "humidity": [54.0] * n,
+        "pressure": [1025.8] * n,
+    }
+    return tz, Series(t=t, mean=vals, lo=vals, hi=vals, bucket_s=bucket, count=n)
+
+
+def test_fall_back_hour_has_no_backward_segment():
+    for bucket in (0, 600):
+        tz, s = _london_fall_back_series(bucket)
+        n_t, co2 = len(s.t), list(s.mean["co2"])
+        fig = figures.timeseries_figure(s, tz=tz)
+        assert len(s.t) == n_t and s.mean["co2"] == co2
+        for tr in fig.data:
+            pts = [(x, y) for x, y in zip(tr.x, tr.y, strict=True)]
+            for (x0, y0), (x1, y1) in zip(pts, pts[1:], strict=False):
+                if y0 is not None and y1 is not None:
+                    assert x1 >= x0, (bucket, x0, x1)
+        mean = [tr for tr in fig.data if tr.name == "CO₂"][0]
+        assert len(mean.x) == 17
+        assert sum(y is None for y in mean.y) == 1
+
+
+def test_no_breaks_without_dst_change():
+    s = series()
+    fig = figures.timeseries_figure(s)
+    assert all(len(tr.x) == len(s.t) for tr in fig.data)
