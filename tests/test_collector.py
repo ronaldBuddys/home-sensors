@@ -58,11 +58,22 @@ async def _wait_for_scanner(task, timeout=5.0):
         await asyncio.sleep(0.01)
 
 
+async def wait_until(predicate, what, timeout=5.0):
+    # Bounded poll for a condition that the collector reaches asynchronously.
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, f"timed out waiting for {what}"
+        await asyncio.sleep(0.01)
+
+
 async def drive(collector, actions, settle=0.3):
+    # An action may be a coroutine function to wait for collector state first.
     task = asyncio.create_task(collector.run())
     await _wait_for_scanner(task)
     for act in actions:
-        act(FakeScanner.instances[-1])
+        res = act(FakeScanner.instances[-1])
+        if asyncio.iscoroutine(res):
+            await res
         await asyncio.sleep(0.05)
     await asyncio.sleep(settle)
     collector.stop()
@@ -148,7 +159,12 @@ def test_failed_backfill_is_retried_after_backoff(store, engine):
 
     c = _collector(store, flaky)
 
-    def expire_backoff(_s):
+    async def expire_backoff(_s):
+        # the device registers and the first backfill fails (setting the backoff) asynchronously
+        await wait_until(
+            lambda: any(d.backfill_failures for d in c._devices.values()),
+            "the device to register and its first backfill to fail",
+        )
         next(iter(c._devices.values())).backfill_not_before = 0
 
     asyncio.run(
