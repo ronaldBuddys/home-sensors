@@ -1,5 +1,7 @@
 """Browser tests (headless Chrome via Playwright). Run: uv run --group e2e pytest -m e2e"""
 
+import json
+import re
 import socket
 import threading
 import time
@@ -92,6 +94,95 @@ def test_presets_change_resolution(page):
     )
     page.click("#preset label:has-text('1h')")
     page.wait_for_function("document.querySelector('#window-label').innerText.includes('raw')")
+
+
+def _changed(request) -> list[str]:
+    return json.loads(request.post_data or "{}").get("changedPropIds", [])
+
+
+def _is_zoom(request) -> bool:
+    """A request carrying a drag-zoom's x range that the preset buttons didn't trigger."""
+    return "xaxis.range" in (request.post_data or "") and "preset.value" not in _changed(request)
+
+
+# Dash's own store (what dash.testing inspects): `queued` callbacks are waiting to be sent,
+# `busy` ones are also in flight or being applied.
+_DASH = "window.store.getState().callbacks"
+QUEUED = f"['requested', 'prioritized', 'blocked'].some(k => {_DASH}[k].length)"
+BUSY = f"Object.keys({_DASH}).some(k => !['stored', 'completed'].includes(k) && {_DASH}[k].length)"
+RELAYOUT = """(() => {
+    const s = window.store.getState();
+    let chart = s.layout;
+    for (const k of s.paths.strs.chart) chart = chart[k];
+    return chart.props.relayoutData || {};
+})()"""
+
+
+def test_preset_survives_relayout_mid_request(page):
+    # #25: any chart relayout, e.g. Plotly's own {"autosize": true} after the first draw,
+    # used to re-run the preset callback while the click's request was in flight; Dash kept
+    # only the newer request, so the click was lost. Hold the click's request until Dash has
+    # handled a relayout, then release it: the preset must still win. Slow CPU as on a Pi 3.
+    # The Pan button guarantees a relayout even if the autosize one came before the click
+    # (Dash only fires callbacks for props that change).
+    cdp = page.context.new_cdp_session(page)
+    cdp.send("Emulation.setCPUThrottlingRate", {"rate": 4})
+    held = []
+
+    def hold(route, request):
+        if "preset.value" in _changed(request) and not held:
+            held.append(route)
+        else:
+            route.continue_()
+
+    page.route(re.compile(r"/_dash-update-component"), hold)
+    with page.expect_request(lambda r: "preset.value" in _changed(r)):
+        page.click("#preset label:has-text('30d')")
+    before = page.evaluate(f"JSON.stringify({RELAYOUT})")
+    page.click("#chart .modebar-btn[data-title='Pan']")
+    page.wait_for_function(f"JSON.stringify({RELAYOUT}) !== {json.dumps(before)} && !({QUEUED})")
+    held[0].continue_()
+    page.wait_for_function(
+        "document.querySelector('#window-label').innerText.includes('2 h averages')",
+        timeout=10000,
+    )
+    page.click("#preset label:has-text('1h')")
+    page.wait_for_function(
+        "document.querySelector('#window-label').innerText.includes('raw')", timeout=10000
+    )
+
+
+def test_preset_beats_an_older_zoom_still_in_flight(page):
+    # The user's newest choice wins: hold a drag-zoom's request, click 30d and let it render,
+    # then release the zoom. Its late answer must not replace the 30d window.
+    held = []
+
+    def hold(route, request):
+        if _is_zoom(request) and not held:
+            held.append(route)
+        else:
+            route.continue_()
+
+    # Let Plotly's first-draw autosize relayout land first: only the zoom is in flight.
+    page.wait_for_function(f"{RELAYOUT}.autosize && !({BUSY})")
+    page.route(re.compile(r"/_dash-update-component"), hold)
+    box = page.locator("#chart .nsewdrag").first.bounding_box()
+    y = box["y"] + box["height"] / 2
+    with page.expect_request(_is_zoom):
+        page.mouse.move(box["x"] + box["width"] * 0.6, y)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] * 0.8, y, steps=5)
+        page.mouse.up()
+    page.click("#preset label:has-text('30d')")
+    page.wait_for_function(
+        "document.querySelector('#window-label').innerText.includes('2 h averages')",
+        timeout=10000,
+    )
+    with page.expect_response(lambda r: _is_zoom(r.request)):
+        held[0].continue_()
+    page.wait_for_function(f"!({BUSY})", timeout=10000)
+    assert "2 h averages" in label(page)
+    assert page.locator("#preset label.selected").inner_text() == "30d"
 
 
 def test_zoom_reloads_detail_and_dblclick_resets(page):
