@@ -11,6 +11,7 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import (
     Connection,
     Engine,
@@ -97,15 +98,19 @@ def init_db(engine: Engine) -> None:
     no ``alembic_version``) is checked and stamped at the baseline revision first, so it is
     upgraded in place without data loss or a manual step.
     """
-    unversioned = db_revision(engine) is None
-    legacy = unversioned and inspect(engine).has_table("devices", schema=schema_of(engine))
+    current = db_revision(engine)
+    legacy = current is None and inspect(engine).has_table("devices", schema=schema_of(engine))
     if legacy:
         check_schema(engine)
+        current = BASELINE_REVISION
     with engine.begin() as conn:
         cfg = alembic_config(conn)
         if legacy:
             log.info("stamping a database created before migrations at %s", BASELINE_REVISION)
             command.stamp(cfg, BASELINE_REVISION)
+        head = ScriptDirectory.from_config(cfg).get_current_head()
+        if current != head:
+            log.info("migrating the database schema: %s -> %s", current or "empty", head)
         command.upgrade(cfg, "head")
         has_raw = conn.execute(select(readings.c.ts).limit(1)).first() is not None
         has_rollup = conn.execute(select(readings_hourly.c.hour).limit(1)).first() is not None

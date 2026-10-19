@@ -29,7 +29,7 @@ def _setup_logging(verbose: bool) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     if not verbose:
-        for noisy in ("bleak", "uvicorn.access"):
+        for noisy in ("alembic", "bleak", "uvicorn.access"):  # init_db logs migrations
             logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
