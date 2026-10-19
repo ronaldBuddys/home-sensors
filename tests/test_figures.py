@@ -1,6 +1,8 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from aranet_monitor.db.queries import Series
 from aranet_monitor.web import figures
 from aranet_monitor.web.dash_app import _parse_relayout, co2_status
@@ -160,26 +162,101 @@ def _heatmap_data(fill=None):
     return {"weekdays": days, "hours": list(range(24)), "mean": mean, "count": count}
 
 
+def _oklab_l(hex_color: str) -> float:
+    def lin(c):
+        c /= 255
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (lin(int(hex_color[i : i + 2], 16)) for i in (1, 3, 5))
+    ls = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ** (1 / 3)
+    ms = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ** (1 / 3)
+    ss = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ** (1 / 3)
+    return 0.2104542553 * ls + 0.7936177850 * ms - 0.0040720468 * ss
+
+
 def test_co2_heatmap_figure():
     data = _heatmap_data(lambda d, h: None if (d, h) == (6, 3) else 500 + 40 * h + d)
     fig = figures.co2_heatmap_figure(data)
     assert [tr.type for tr in fig.data] == ["heatmap"]
     hm = fig.data[0]
-    assert hm.zmin == 400 and hm.zmax == 1426  # data max (above 1400) sets the top
-    light = figures.THEMES["light"]["sequential"]
+    assert hm.zmin == 400 and hm.zmax == pytest.approx(1610)  # alert * 1.15 beats the data max
+    light = figures.THEMES["light"]["heatmap"]
     assert hm.colorscale[0][1].lower() == light[0] and hm.colorscale[-1][1].lower() == light[-1]
     assert hm.xgap == 2 and hm.ygap == 2
     assert fig.layout.yaxis.autorange == "reversed" and list(hm.y)[0] == "Mon"
     assert hm.z[6][3] is None and "no data" in hm.text[6][3]
     assert "Tue 14:00–15:00" in hm.text[1][14] and "1,061 ppm" in hm.text[1][14]
 
+    dark_ramp = figures.THEMES["dark"]["heatmap"]
     dark = figures.co2_heatmap_figure(data, theme="dark").data[0]
-    assert dark.colorscale[0][1].lower() == light[-1] and dark.colorscale[-1][1].lower() == light[0]
+    assert dark_ramp != light  # the dark theme picks its own stops
+    assert [c.lower() for _, c in dark.colorscale] == dark_ramp
 
 
 def test_co2_heatmap_figure_scale_and_empty():
     calm = figures.co2_heatmap_figure(_heatmap_data(lambda d, h: 600 if h == 9 else 450))
-    assert calm.data[0].zmax == 1400  # a well-ventilated home doesn't fill the ramp
+    assert calm.data[0].zmax == pytest.approx(1610)  # a well-ventilated home doesn't fill the ramp
+    hot = figures.co2_heatmap_figure(_heatmap_data(lambda d, h: 2000)).data[0]
+    assert hot.zmax == 2000
     empty = figures.co2_heatmap_figure(_heatmap_data())
     assert not [tr for tr in empty.data if tr.type == "heatmap"]
     assert "Not enough data" in empty.layout.annotations[0].text
+
+
+@pytest.mark.parametrize(
+    ("warn", "alert"), [(1000, 1400), (800, 1200)], ids=["defaults", "custom-800-1200"]
+)
+@pytest.mark.parametrize("peak", [450, 3000], ids=["data-below", "data-above"])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_co2_heatmap_colour_stops_follow_thresholds(warn, alert, peak, theme):
+    data = _heatmap_data(lambda d, h: peak if (d, h) == (2, 12) else 500)
+    hm = figures.co2_heatmap_figure(data, theme, co2_warn=warn, co2_alert=alert).data[0]
+    zmin, zmax = hm.zmin, hm.zmax
+    assert zmax == pytest.approx(max(alert * 1.15, peak))
+    pos = [p for p, _ in hm.colorscale]
+    assert pos[0] == 0 and pos[-1] == 1 and pos == sorted(set(pos))  # Plotly's requirements
+    ramp = figures.THEMES[theme]["heatmap"]
+    assert [c.lower() for _, c in hm.colorscale] == ramp
+    value = lambda p: zmin + p * (zmax - zmin)  # noqa: E731
+    assert value(pos[1]) == pytest.approx((zmin + warn) / 2)
+    assert value(pos[2]) == pytest.approx(warn)  # amber at "elevated"
+    assert value(pos[3]) == pytest.approx(alert)  # orange-red at "high"
+    # Same story on the colour bar, in words as well as colour.
+    cb = hm.colorbar
+    assert list(cb.tickvals) == [400, warn, alert]
+    assert "elevated" in cb.ticktext[1] and f"{warn:,}" in cb.ticktext[1]
+    assert "high" in cb.ticktext[2] and f"{alert:,}" in cb.ticktext[2]
+    assert cb.nticks is None
+
+
+@pytest.mark.parametrize(("warn", "alert"), [(1400, 1000), (1000, 1000), (300, 1400)])
+def test_co2_heatmap_misconfigured_thresholds_space_stops_evenly(warn, alert):
+    data = _heatmap_data(lambda d, h: 700)
+    hm = figures.co2_heatmap_figure(data, co2_warn=warn, co2_alert=alert).data[0]
+    pos = [p for p, _ in hm.colorscale]
+    assert pos == pytest.approx([i / (len(pos) - 1) for i in range(len(pos))])
+
+
+def test_heatmap_ramps_are_monotonic_in_lightness():
+    for theme, sign in (("light", -1), ("dark", 1)):
+        # light: darker toward high CO2; dark: lighter (low values recede toward the surface)
+        ls = [_oklab_l(c) for c in figures.THEMES[theme]["heatmap"]]
+        steps = [b - a for a, b in zip(ls, ls[1:], strict=False)]
+        assert all(sign * d >= 0.06 for d in steps), (theme, ls)
+
+
+@pytest.mark.parametrize(("warn", "alert"), [(1400, 1000), (1000, 1000), (400, 1400), (300, 1400)])
+def test_co2_heatmap_misconfigured_thresholds_label_nothing_misleading(warn, alert):
+    data = _heatmap_data(lambda d, h: 700)
+    hm = figures.co2_heatmap_figure(data, co2_warn=warn, co2_alert=alert).data[0]
+    ticks = list(hm.colorbar.tickvals)
+    assert len(ticks) == len(set(ticks))  # never two labels on one value
+    assert all(hm.zmin <= t <= hm.zmax for t in ticks)  # nothing off the bar
+    assert ticks == sorted(ticks)
+    assert not any("elevated" in t or "high" in t for t in hm.colorbar.ticktext)
+
+
+def test_co2_heatmap_threshold_labels_never_show_decimals():
+    data = _heatmap_data(lambda d, h: 700)
+    hm = figures.co2_heatmap_figure(data, co2_warn=1000.0, co2_alert=1400.0).data[0]
+    assert list(hm.colorbar.ticktext) == ["400", "1,000 elevated", "1,400 high"]
