@@ -236,3 +236,101 @@ def test_demo_never_uses_configured_db(db, tmp_path, monkeypatch):
 def test_demo_parser_defaults():
     args = cli.build_parser().parse_args(["demo"])
     assert args.days == 30 and args.interval == 60 and args.db is None and args.port is None
+
+
+# ------------------------------------------------------------- collect: DB start-up retry
+def _flaky_init_db(monkeypatch, failures, exc, real=cli.init_db):
+    calls = []
+
+    def init_db(engine):
+        calls.append(1)
+        if len(calls) <= failures:
+            raise exc
+        real(engine)
+
+    monkeypatch.setattr(cli, "init_db", init_db)
+    return calls
+
+
+def _collect_env(monkeypatch, tmp_path, url):
+    monkeypatch.setenv("ARANET_DB_URL", url)
+    from aranet_monitor.ble import collector
+
+    async def run(self):
+        return None
+
+    monkeypatch.setattr(collector.Collector, "run", run)
+
+
+def test_collect_retries_until_db_reachable(tmp_path, monkeypatch, caplog):
+    import logging
+
+    from sqlalchemy.exc import OperationalError
+
+    exc = OperationalError("connect", {}, Exception("connection refused\nsecond line"))
+    calls = _flaky_init_db(monkeypatch, 2, exc)
+    _collect_env(monkeypatch, tmp_path, f"sqlite:///{tmp_path}/c.sqlite")
+    sleeps = []
+    monkeypatch.setattr(cli.time, "sleep", sleeps.append)
+    with caplog.at_level(logging.INFO, logger="aranet"):
+        assert cli.main(["collect"]) == 0
+    assert len(calls) == 3
+    assert [s for s in sleeps if s >= 2][:2] == [2, 4]
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2
+    assert all(r.exc_info is None for r in caplog.records)
+    assert "database not reachable (OperationalError: " in warnings[0].getMessage()
+    assert "second line" not in caplog.text
+    assert "database reachable after 3 attempt(s)" in caplog.text
+
+
+def test_collect_never_logs_the_password(tmp_path, monkeypatch, caplog):
+    from sqlalchemy.exc import OperationalError
+
+    url = "postgresql+psycopg://u:hunter2@127.0.0.1:1/x"
+    exc = OperationalError("connect", {}, Exception(f"could not connect to {url}"))
+    _flaky_init_db(monkeypatch, 1, exc, real=lambda engine: None)  # no real server here
+    _collect_env(monkeypatch, tmp_path, url)
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+    assert cli.main(["collect"]) == 0
+    assert "hunter2" not in caplog.text
+
+
+def test_collect_does_not_retry_programming_errors(tmp_path, monkeypatch):
+    import pytest
+    from sqlalchemy.exc import ProgrammingError
+
+    calls = _flaky_init_db(monkeypatch, 99, ProgrammingError("ddl", {}, Exception("denied")))
+    _collect_env(monkeypatch, tmp_path, f"sqlite:///{tmp_path}/c.sqlite")
+    sleeps = []
+    monkeypatch.setattr(cli.time, "sleep", sleeps.append)
+    with pytest.raises(ProgrammingError):
+        cli.main(["collect"])
+    assert len(calls) == 1 and sleeps == []
+
+
+def test_collect_exits_cleanly_on_ctrl_c_while_waiting(tmp_path, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    _flaky_init_db(monkeypatch, 99, OperationalError("connect", {}, Exception("refused")))
+    _collect_env(monkeypatch, tmp_path, f"sqlite:///{tmp_path}/c.sqlite")
+
+    def interrupt(seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli.time, "sleep", interrupt)
+    assert cli.main(["collect"]) == 0
+
+
+def test_backoff_is_capped(tmp_path, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    from aranet_monitor.config import Settings
+
+    _flaky_init_db(monkeypatch, 12, OperationalError("connect", {}, Exception("refused")))
+    monkeypatch.setenv("ARANET_DB_URL", f"sqlite:///{tmp_path}/c.sqlite")
+    sleeps = []
+    cli._open_store_with_retry(Settings.from_env(), sleep=sleeps.append)
+    assert len(sleeps) == 12
+    assert sleeps[:6] == [2, 4, 8, 16, 32, 60]
+    assert max(sleeps) <= 60 and sleeps[-1] == 60

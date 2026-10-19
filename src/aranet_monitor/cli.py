@@ -40,6 +40,41 @@ def _store(settings: Settings, db_url: str | None = None) -> Store:
     return Store(engine)
 
 
+def _open_store_with_retry(settings: Settings, *, max_wait_s: float | None = None, sleep=None):
+    """Writer access that waits for an unreachable database (collector start-up).
+
+    Connection-type errors are logged as one line (no traceback) and retried with back-off
+    (2 s doubling to 60 s); anything else, such as a programming or permission error, raises
+    at once. ``max_wait_s`` bounds the total wait (None: wait forever, systemd owns the
+    lifecycle). ``init_db`` is idempotent, so a retry after a half-finished attempt is safe.
+    """
+    from sqlalchemy.exc import InterfaceError, OperationalError
+
+    sleep = sleep or time.sleep
+    delay, waited, attempts = 2, 0, 0
+    while True:
+        attempts += 1
+        try:
+            store = _store(settings)
+        except (OperationalError, InterfaceError) as e:
+            if max_wait_s is not None and waited + delay > max_wait_s:
+                raise
+            reason = (str(e.orig or e).splitlines() or [""])[0]
+            log.warning(
+                "database not reachable (%s: %s); retrying in %ds",
+                type(e).__name__,
+                reason.replace(settings.db_url, _safe_url(settings.db_url)),
+                delay,
+            )
+            sleep(delay)
+            waited += delay
+            delay = min(delay * 2, 60)
+            continue
+        if attempts > 1:
+            log.info("database reachable after %d attempt(s)", attempts)
+        return store
+
+
 def _queries(settings: Settings):
     """Read-only access: no DDL, fails clearly if the schema is missing."""
     from aranet_monitor.db.queries import Queries
@@ -101,7 +136,10 @@ def cmd_collect(args, settings: Settings) -> int:
     """Run the continuous collector."""
     from aranet_monitor.ble.collector import Collector
 
-    store = _store(settings)
+    try:
+        store = _open_store_with_retry(settings)
+    except KeyboardInterrupt:
+        return 0
     log.info("collector writing to %s", _safe_url(settings.db_url))
     if settings.devices:
         log.info("device allow-list: %s", ", ".join(settings.devices))
