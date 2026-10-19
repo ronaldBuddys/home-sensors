@@ -110,6 +110,7 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
                 dcc.Store(id="theme", storage_type="local"),
                 dcc.Store(id="latest-ts"),
                 dcc.Store(id="window", data={"preset": DEFAULT_PRESET}),
+                dcc.Store(id="zoom-req"),
                 dcc.Interval(id="poll", interval=settings.refresh_s * 1000),
                 dcc.Interval(id="tick", interval=5000),
                 html.Header(
@@ -346,6 +347,17 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
         return tiles
 
     # ---------------------------------------------------------------- window selection
+    # Only user zooms/resets reach the server. Dash drops the in-flight request of a callback
+    # that fires again, and Plotly also sends relayouts of its own ({"autosize": true} after
+    # the first draw), which used to cancel a preset click (#25). Filtering in the browser
+    # keeps every real choice on choose_window, so the newest of them always wins.
+    app.clientside_callback(
+        ClientsideFunction("aranet", "zoomRequest"),
+        Output("zoom-req", "data"),
+        Input("chart", "relayoutData"),
+        prevent_initial_call=True,
+    )
+
     @app.callback(
         Output("window", "data"),
         Output("preset", "value"),
@@ -354,11 +366,12 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
         Input("preset", "value"),
         Input("dates", "start_date"),
         Input("dates", "end_date"),
+        Input("zoom-req", "data"),
         Input("device", "value"),
         State("window", "data"),
         prevent_initial_call=True,
     )
-    def choose_window(preset, d0, d1, _device, window):
+    def choose_window(preset, d0, d1, zoom, _device, window):
         trig = ctx.triggered_id
         if trig == "device":
             # A zoomed/custom window belongs to the previous device; go back to a live preset.
@@ -375,29 +388,18 @@ def create_dash_app(queries: Queries, settings: Settings) -> dash.Dash:
             if not d0 and not d1:
                 return {"preset": DEFAULT_PRESET}, DEFAULT_PRESET, no_update, no_update
             return no_update, no_update, no_update, no_update
+        if trig == "zoom-req":
+            parsed = _parse_relayout((zoom or {}).get("relayout"))
+            if parsed == "reset":
+                if not window.get("zoom"):
+                    return no_update, no_update, no_update, no_update  # nothing to undo
+                base = window.get("base") or {"preset": DEFAULT_PRESET}
+                return base, base.get("preset") or no_update, no_update, no_update
+            if isinstance(parsed, tuple):
+                start, end = (_local_to_epoch(p, tz) for p in parsed)
+                base = window.get("base") or window
+                return {"start": start, "end": end, "zoom": True, "base": base}, *([no_update] * 3)
         return no_update, no_update, no_update, no_update
-
-    # A separate callback on purpose: Dash drops the in-flight request of a callback that
-    # fires again, and Plotly sends relayouts of its own ({"autosize": true} on first draw
-    # and resize). Sharing choose_window let one of those discard a preset click (#25).
-    @app.callback(
-        Output("window", "data", allow_duplicate=True),
-        Input("chart", "relayoutData"),
-        State("window", "data"),
-        prevent_initial_call=True,
-    )
-    def zoom_window(relayout, window):
-        parsed = _parse_relayout(relayout)
-        if parsed == "reset":
-            if not window.get("zoom"):
-                return no_update  # nothing to undo
-            # The preset buttons still show the base: zooming never changes them.
-            return window.get("base") or {"preset": DEFAULT_PRESET}
-        if isinstance(parsed, tuple):
-            start, end = (_local_to_epoch(p, tz) for p in parsed)
-            base = window.get("base") or window
-            return {"start": start, "end": end, "zoom": True, "base": base}
-        return no_update
 
     # ---------------------------------------------------------------- chart + summary
     @app.callback(
