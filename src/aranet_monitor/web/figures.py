@@ -61,6 +61,52 @@ def to_local(ts: list[int], tz: ZoneInfo | None) -> list[str]:
     return out
 
 
+def _break_backward_jumps(x: list[str], s: Series) -> tuple[list, dict, dict, dict]:
+    """Insert a ``None`` point wherever local time goes backwards (DST fall-back).
+
+    The repeated hour would otherwise be drawn as a stroke running back across the plot. Returns
+    new ``x`` and per-metric ``mean``/``lo``/``hi`` lists; ``s`` is not mutated.
+    """
+    nx: list = []
+    mean: dict = {m: [] for m in s.mean}
+    lo: dict = {m: [] for m in s.lo}
+    hi: dict = {m: [] for m in s.hi}
+    for i, xi in enumerate(x):
+        if i and xi < x[i - 1]:
+            nx.append(xi)
+            for d in (mean, lo, hi):
+                for col in d.values():
+                    col.append(None)
+        nx.append(xi)
+        for d, src in ((mean, s.mean), (lo, s.lo), (hi, s.hi)):
+            for m, col in d.items():
+                col.append(src[m][i])
+    return nx, mean, lo, hi
+
+
+def _envelope_polygons(x: list, lo: list, hi: list) -> tuple[list, list]:
+    """Closed lo–hi polygons, one per contiguous run, separated by ``None``.
+
+    ``fill="tonexty"`` ignores ``None`` gaps and draws a wedge across them; disjoint ``toself``
+    shapes keep the wash to the segments that have data. Single-point runs have no area.
+    """
+    px: list = []
+    py: list = []
+    run: list[int] = []
+    for i in (*range(len(x)), None):
+        if i is not None and x[i] is not None and lo[i] is not None and hi[i] is not None:
+            run.append(i)
+            continue
+        if len(run) > 1:
+            if px:
+                px.append(None)
+                py.append(None)
+            px += [x[j] for j in run] + [x[j] for j in reversed(run)]
+            py += [hi[j] for j in run] + [lo[j] for j in reversed(run)]
+        run = []
+    return px, py
+
+
 def empty_figure(message: str, theme: str = "light") -> go.Figure:
     """Placeholder with a centred message (no data yet, etc.)."""
     th = THEMES[theme]
@@ -117,32 +163,20 @@ def timeseries_figure(
     )
     # Style subplot titles now, before any other annotations (threshold labels) are added.
     fig.update_annotations(font={"size": 13, "color": th["ink2"]}, xanchor="left", x=0)
-    x = to_local(s.t, tz)
+    x, mean, lo, hi = _break_backward_jumps(to_local(s.t, tz), s)
     aggregated = s.bucket_s > 0
     for row, (metric, title, unit, dec) in enumerate(panels, start=1):
         color = th["series"][(row - 1) % len(th["series"])]
         fmt = f",.{dec}f"
         if aggregated:
+            env_x, env_y = _envelope_polygons(x, lo[metric], hi[metric])
             fig.add_trace(
                 go.Scatter(
-                    x=x,
-                    y=s.hi[metric],
+                    x=env_x,
+                    y=env_y,
                     mode="lines",
                     line={"width": 0},
-                    hoverinfo="skip",
-                    showlegend=False,
-                    connectgaps=False,
-                ),
-                row=row,
-                col=1,
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=s.lo[metric],
-                    mode="lines",
-                    line={"width": 0},
-                    fill="tonexty",
+                    fill="toself",
                     fillcolor=_hex_to_rgba(color, 0.14),
                     hoverinfo="skip",
                     showlegend=False,
@@ -151,7 +185,7 @@ def timeseries_figure(
                 row=row,
                 col=1,
             )
-            custom = list(zip(s.lo[metric], s.hi[metric], strict=True))
+            custom = list(zip(lo[metric], hi[metric], strict=True))
             hover = (
                 f"<b>%{{y:{fmt}}} {unit}</b> {title}"
                 f" <span style='opacity:.7'>(%{{customdata[0]:{fmt}}}"
@@ -164,7 +198,7 @@ def timeseries_figure(
         fig.add_trace(
             go.Scatter(
                 x=x,
-                y=s.mean[metric],
+                y=mean[metric],
                 mode="lines",
                 name=title,
                 line={"width": 2, "color": color, "shape": "linear"},

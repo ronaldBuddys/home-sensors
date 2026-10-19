@@ -1,3 +1,6 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from aranet_monitor.db.queries import Series
 from aranet_monitor.web import figures
 from aranet_monitor.web.dash_app import _parse_relayout, co2_status
@@ -55,3 +58,96 @@ def test_parse_relayout():
         {"xaxis3.range[0]": "2026-01-01 00:00", "xaxis3.range[1]": "2026-01-02"}
     ) == ("2026-01-01 00:00", "2026-01-02")
     assert _parse_relayout({"xaxis.range": ["a", "b"]}) == ("a", "b")
+
+
+def _london_fall_back_series(bucket):
+    tz = ZoneInfo("Europe/London")
+    t0 = int(datetime(2026, 10, 25, 0, 30, tzinfo=tz).timestamp())
+    n = 16
+    t = [t0 + 600 * k for k in range(n)]
+    vals = {
+        "co2": [800 + i for i in range(n)],
+        "temperature": [22.1] * n,
+        "humidity": [54.0] * n,
+        "pressure": [1025.8] * n,
+    }
+    return tz, Series(t=t, mean=vals, lo=vals, hi=vals, bucket_s=bucket, count=n)
+
+
+def test_fall_back_hour_has_no_backward_segment():
+    for bucket in (0, 600):
+        tz, s = _london_fall_back_series(bucket)
+        n_t, co2 = len(s.t), list(s.mean["co2"])
+        fig = figures.timeseries_figure(s, tz=tz)
+        assert len(s.t) == n_t and s.mean["co2"] == co2
+        for tr in fig.data:
+            paths = [list(zip(tr.x, tr.y, strict=True))]
+            if tr.fill:  # polygons close by retracing; only the outbound (hi) half is a path
+                paths = [piece[: len(piece) // 2] for piece in _pieces(tr.y, tr.x)]
+            for pts in paths:
+                for (x0, y0), (x1, y1) in zip(pts, pts[1:], strict=False):
+                    if y0 is not None and y1 is not None:
+                        assert x1 >= x0, (bucket, x0, x1)
+        mean = [tr for tr in fig.data if tr.name == "CO₂"][0]
+        assert len(mean.x) == 17
+        assert sum(y is None for y in mean.y) == 1
+
+
+def test_no_breaks_without_dst_change():
+    s = series()
+    fig = figures.timeseries_figure(s)
+    assert all(len(tr.x) == len(s.t) for tr in fig.data)
+
+
+def _gap_series(n=9, k=4):
+    t = list(range(0, 600 * n, 600))
+    mean = {
+        m: [100.0 + i if i != k else None for i in range(n)] for m in [p[0] for p in figures.PANELS]
+    }
+    lo = {
+        m: [None if v is None else v - 5 - i for i, v in enumerate(col)] for m, col in mean.items()
+    }
+    hi = {
+        m: [None if v is None else v + 7 + i for i, v in enumerate(col)] for m, col in mean.items()
+    }
+    return Series(t=t, mean=mean, lo=lo, hi=hi, bucket_s=600, count=n)
+
+
+def _pieces(values, xs):
+    """Split parallel ``xs``/``values`` lists on ``None`` separators in ``xs``."""
+    out, cur = [], []
+    for x, v in zip(xs, values, strict=True):
+        if x is None:
+            out.append(cur)
+            cur = []
+        else:
+            cur.append((x, v))
+    return [*out, cur]
+
+
+def test_envelope_never_spans_a_gap():
+    n, k = 9, 4
+    s = _gap_series(n, k)
+    fig = figures.timeseries_figure(s)
+    x = figures.to_local(s.t, None)
+    fills = [tr for tr in fig.data if tr.fill]
+    assert fills
+    for tr in fills:
+        for piece in _pieces(tr.y, tr.x):
+            xs = [p[0] for p in piece]
+            assert all(v <= x[k - 1] for v in xs) or all(v >= x[k + 1] for v in xs)
+
+
+def test_envelope_covers_each_segment():
+    n, k = 9, 4
+    s = _gap_series(n, k)
+    fig = figures.timeseries_figure(s)
+    fills = [tr for tr in fig.data if tr.fill]
+    assert len(fills) == len(figures.PANELS)
+    for tr, (metric, *_rest) in zip(fills, figures.PANELS, strict=True):
+        pieces = _pieces(tr.y, tr.x)
+        assert len(pieces) == 2
+        for piece, seg in zip(pieces, (range(0, k), range(k + 1, n)), strict=True):
+            ys = [p[1] for p in piece]
+            assert min(ys) == min(s.lo[metric][i] for i in seg)
+            assert max(ys) == max(s.hi[metric][i] for i in seg)
