@@ -189,25 +189,31 @@ class Queries:
         self.engine = engine
 
     # ------------------------------------------------------------------ devices
-    def list_devices(self) -> list[dict]:
-        """All known devices with their latest measurement time and row count."""
+    @staticmethod
+    def _devices_select():
+        """Device columns plus latest/earliest measurement time."""
         r = readings.c
 
         def per_device(agg):  # correlated subquery: one index lookup per device, one round trip
             return select(agg(r.ts)).where(r.device_id == devices.c.id).scalar_subquery()
 
-        stmt = select(
+        return select(
             devices,
             per_device(func.max).label("latest_ts"),
             per_device(func.min).label("earliest_ts"),
-        ).order_by(devices.c.id)
+        )
+
+    def list_devices(self) -> list[dict]:
+        """All known devices with their latest measurement time and row count."""
+        stmt = self._devices_select().order_by(devices.c.id)
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings()]
 
     def device(self, device_id: int) -> dict | None:
-        """One device row."""
+        """One device, with the same fields as `list_devices`."""
+        stmt = self._devices_select().where(devices.c.id == device_id)
         with self.engine.connect() as conn:
-            row = conn.execute(select(devices).where(devices.c.id == device_id)).mappings().first()
+            row = conn.execute(stmt).mappings().first()
             return dict(row) if row else None
 
     # ------------------------------------------------------------------ latest

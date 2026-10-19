@@ -30,6 +30,13 @@ def test_devices_and_latest(client):
     assert 400 <= lat["co2"] < 5000 and lat["age_s"] < 120
 
 
+def test_device_matches_list_item(client):
+    listed = client.get("/api/v1/devices").json()[0]
+    one = client.get(f"/api/v1/devices/{listed['id']}").json()
+    assert one["latest_ts"] is not None and one["earliest_ts"] is not None
+    assert one == listed
+
+
 def test_readings_ranges(client):
     raw = client.get("/api/v1/devices/1/readings?range=1h&metrics=co2").json()
     assert raw["bucket_s"] == 0 and 55 <= len(raw["t"]) <= 61
