@@ -13,7 +13,7 @@ Run these from the repo directory, with `.env` configured (see [`.env.example`](
 **1. Make it permanent.** This survives logout and reboot:
 
 ```bash
-./scripts/devctl.sh stop all            # stop any dev processes first
+systemctl --user stop aranet-collector aranet-web   # stop any running instances first
 ./deploy/install-user-services.sh       # install + start aranet-collector and aranet-web
 loginctl enable-linger "$USER"          # start at boot and keep running while logged out
 ```
@@ -124,7 +124,8 @@ uv run pytest                              # unit/integration tests (SQLite)
 ARANET_TEST_PG_URL=postgresql+psycopg://… uv run pytest   # fixture-based DB tests on Postgres
 uv run --group e2e pytest -m e2e           # headless-Chrome dashboard tests (uses installed Chrome)
 uv run ruff check . && uv run ruff format .
-./scripts/devctl.sh {start|stop|status} [collector|web|web-sim]   # dev processes w/o systemd
+uv run aranet collect                      # run the collector in a terminal (no systemd)
+uv run aranet serve                        # run the web app in a terminal (no systemd)
 ```
 
 ## License

@@ -9,6 +9,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from aranet_monitor.db.schema import CO2_LEVELS, ROLLUP_METRICS, readings, readings_hourly
 
 HOUR = 3600
+ROLLUP_CHUNK_S = 30 * 86400
 
 
 def _rollup_select(device_id: int, lo: int, hi: int):
@@ -48,20 +49,16 @@ def refresh_rollup(conn: Connection, device_id: int, lo: int, hi: int) -> None:
     conn.execute(stmt)
 
 
-def rebuild_rollup(
-    conn: Connection, device_id: int | None = None, chunk_s: int = 30 * 86400
-) -> int:
-    """Rebuild the rollup for one or all devices in month-sized chunks; returns hours written."""
+def rebuild_rollup(conn: Connection) -> int:
+    """Rebuild the rollup for all devices in month-sized chunks; returns hours written."""
     r = readings.c
     q = select(r.device_id, func.min(r.ts), func.max(r.ts)).group_by(r.device_id)
-    if device_id is not None:
-        q = q.where(r.device_id == device_id)
     hours = 0
     for dev, lo, hi in conn.execute(q).all():
         conn.execute(readings_hourly.delete().where(readings_hourly.c.device_id == dev))
         start = lo
         while start <= hi:
-            end = min(hi, start + chunk_s - 1)
+            end = min(hi, start + ROLLUP_CHUNK_S - 1)
             refresh_rollup(conn, dev, start, end)
             start = end + 1
         hours += conn.execute(
