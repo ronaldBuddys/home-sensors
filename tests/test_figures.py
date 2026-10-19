@@ -243,3 +243,20 @@ def test_heatmap_ramps_are_monotonic_in_lightness():
         ls = [_oklab_l(c) for c in figures.THEMES[theme]["heatmap"]]
         steps = [b - a for a, b in zip(ls, ls[1:], strict=False)]
         assert all(sign * d >= 0.06 for d in steps), (theme, ls)
+
+
+@pytest.mark.parametrize(("warn", "alert"), [(1400, 1000), (1000, 1000), (400, 1400), (300, 1400)])
+def test_co2_heatmap_misconfigured_thresholds_label_nothing_misleading(warn, alert):
+    data = _heatmap_data(lambda d, h: 700)
+    hm = figures.co2_heatmap_figure(data, co2_warn=warn, co2_alert=alert).data[0]
+    ticks = list(hm.colorbar.tickvals)
+    assert len(ticks) == len(set(ticks))  # never two labels on one value
+    assert all(hm.zmin <= t <= hm.zmax for t in ticks)  # nothing off the bar
+    assert ticks == sorted(ticks)
+    assert not any("elevated" in t or "high" in t for t in hm.colorbar.ticktext)
+
+
+def test_co2_heatmap_threshold_labels_never_show_decimals():
+    data = _heatmap_data(lambda d, h: 700)
+    hm = figures.co2_heatmap_figure(data, co2_warn=1000.0, co2_alert=1400.0).data[0]
+    assert list(hm.colorbar.ticktext) == ["400", "1,000 elevated", "1,400 high"]
