@@ -22,7 +22,7 @@ if [[ "$REPO" =~ [[:space:]] ]]; then
   echo "the repo path must not contain whitespace (systemd unit paths): $REPO" >&2
   exit 1
 fi
-[[ -x "$REPO/.venv/bin/aranet" ]] || (cd "$REPO" && uv sync --frozen --no-dev)
+(cd "$REPO" && uv sync --frozen --no-dev)  # no-op when in sync; picks up new deps after a git pull
 mkdir -p "$REPO/data" && chmod 700 "$REPO/data"
 [[ -f "$REPO/.env" ]] && chmod 600 "$REPO/.env"
 mkdir -p "$UNIT_DIR"
