@@ -10,8 +10,16 @@ from plotly.subplots import make_subplots
 
 from aranet_monitor.db.queries import Series
 
-# Sequential blue ramp, steps 100-700 every other step (dataviz palette), light -> dark.
-_BLUE_RAMP = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
+# Heatmap ramps, low -> high CO2: green (outdoor air) -> amber (elevated) -> red (high).
+# Derived in OKLCH with a fixed lightness schedule (0.75 -> 0.49 light, 0.46 -> 0.74 dark, steps
+# of 0.065 / 0.07), hue 140 -> 112 -> 75 -> 42 -> 25 and the highest in-gamut chroma, then checked
+# with the dataviz validator (--ordinal, surfaces #fcfcfb / #1a1a19). Lightness is monotone, every
+# adjacent step is >= 0.06 L and the low end clears 2:1 against the surface. The one deliberate
+# exception is "Single hue": a green -> red ramp spans ~115 degrees by design, so colour-vision
+# safety rests on the monotone lightness plus the labelled thresholds on the colour bar.
+# Light darkens toward high CO2; dark lightens, so low values recede toward the dark surface.
+_HEATMAP_LIGHT = ["#7cc36c", "#9da200", "#b37900", "#bf4700", "#ac262a"]
+_HEATMAP_DARK = ["#2f6633", "#637510", "#a97500", "#e76c2b", "#ff7e77"]
 
 # Palette validated for colour-vision deficiency. Categorical slots are used in fixed order.
 THEMES = {
@@ -23,7 +31,7 @@ THEMES = {
         "grid": "#e1e0d9",
         "axis": "#c3c2b7",
         "series": ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"],
-        "sequential": _BLUE_RAMP,
+        "heatmap": _HEATMAP_LIGHT,
     },
     "dark": {
         "surface": "#1a1a19",
@@ -33,8 +41,7 @@ THEMES = {
         "grid": "#2c2c2a",
         "axis": "#383835",
         "series": ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300"],
-        # Low values recede toward the dark surface, high values come forward.
-        "sequential": _BLUE_RAMP[::-1],
+        "heatmap": _HEATMAP_DARK,
     },
 }
 # Smallest y-axis span per panel, so quantisation steps (0.1 °C, 1 %RH) and sensor noise
@@ -338,7 +345,25 @@ def _co2_bands(fig: go.Figure, row: int, s: Series, warn: int, alert: int, th: d
     fig.update_yaxes(range=[max(0, min(lo, 400) - 30), max(top * 1.05, warn * 0.8)], row=row, col=1)
 
 
-def co2_heatmap_figure(data: dict, theme: str = "light") -> go.Figure:
+def _heatmap_colorscale(
+    ramp: list[str], zmin: float, zmax: float, warn: float, alert: float
+) -> list[list]:
+    """Colour stops placed by value: amber at ``warn``, orange-red at ``alert``.
+
+    Falls back to evenly spaced stops when the thresholds don't fit inside the scale (for
+    example ``warn >= alert``), since Plotly needs strictly increasing positions.
+    """
+    values = [zmin, (zmin + warn) / 2, warn, alert, zmax]
+    if not zmin < warn < alert < zmax:
+        return [[i / (len(ramp) - 1), c] for i, c in enumerate(ramp)]
+    pos = [(v - zmin) / (zmax - zmin) for v in values]
+    pos[0], pos[-1] = 0.0, 1.0
+    return [[p, c] for p, c in zip(pos, ramp, strict=True)]
+
+
+def co2_heatmap_figure(
+    data: dict, theme: str = "light", co2_warn: float = 1000, co2_alert: float = 1400
+) -> go.Figure:
     """Mean CO₂ by weekday (rows, Monday on top) and local hour (columns).
 
     Parameters
@@ -347,13 +372,17 @@ def co2_heatmap_figure(data: dict, theme: str = "light") -> go.Figure:
         ``Queries.co2_heatmap`` output: ``weekdays``, ``hours`` and 7 × 24 ``mean``/``count``.
     theme
         ``"light"`` or ``"dark"``.
+    co2_warn, co2_alert
+        The "elevated" and "high" thresholds (ppm); the colour scale is amber at the first and
+        orange-red at the second, and the colour bar labels both.
 
     Returns
     -------
     go.Figure
-        One heatmap on the theme's sequential blue ramp. The scale starts at the outdoor
-        baseline (400 ppm) and tops out no lower than 1400 ppm, so a well-ventilated home
-        doesn't look alarming. Empty cells stay blank; every cell has its own hover.
+        One heatmap on the theme's green -> amber -> red ramp. The scale starts at the outdoor
+        baseline (400 ppm) and tops out no lower than 1.15 x ``co2_alert``, so a well-ventilated
+        home doesn't look alarming and the alert colour is never at the very top. Empty cells
+        stay blank; every cell has its own hover.
     """
     th = THEMES[theme]
     days, hours, mean, count = data["weekdays"], data["hours"], data["mean"], data["count"]
@@ -370,7 +399,7 @@ def co2_heatmap_figure(data: dict, theme: str = "light") -> go.Figure:
                 f"{when} · no data" if v is None else f"{when} · <b>{v:,} ppm</b> mean (n={n:,})"
             )
         text.append(cells)
-    ramp = th["sequential"]
+    zmin, zmax = 400, max(co2_alert * 1.15, max(values))
     fig = go.Figure(
         go.Heatmap(
             x=hours,
@@ -379,9 +408,9 @@ def co2_heatmap_figure(data: dict, theme: str = "light") -> go.Figure:
             text=text,
             hovertemplate="%{text}<extra></extra>",
             hoverongaps=True,
-            colorscale=[[i / (len(ramp) - 1), c] for i, c in enumerate(ramp)],
-            zmin=400,
-            zmax=max(1400, max(values)),
+            colorscale=_heatmap_colorscale(th["heatmap"], zmin, zmax, co2_warn, co2_alert),
+            zmin=zmin,
+            zmax=zmax,
             xgap=2,
             ygap=2,
             colorbar={
@@ -390,7 +419,9 @@ def co2_heatmap_figure(data: dict, theme: str = "light") -> go.Figure:
                 "outlinewidth": 0,
                 "tickfont": {"size": 10, "color": th["muted"]},
                 "ticks": "",
-                "nticks": 5,
+                "tickmode": "array",
+                "tickvals": [zmin, co2_warn, co2_alert],
+                "ticktext": [f"{zmin}", f"{co2_warn:,} elevated", f"{co2_alert:,} high"],
                 "separatethousands": True,
                 "xpad": 12,
             },
