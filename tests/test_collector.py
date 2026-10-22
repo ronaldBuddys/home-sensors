@@ -505,3 +505,21 @@ def test_sensor_out_of_range_only_restarts_scanner(store, engine, monkeypatch):
     asyncio.run(drive(c, [other_devices_keep_talking], settle=0.0))
     assert _events(engine, "scanner_restart") >= 2
     assert not resets
+
+
+def test_failed_scanner_start_is_cleaned_up(store, engine, monkeypatch):
+    """A start that times out must be stopped, or BlueZ reports InProgress from then on."""
+    monkeypatch.setattr(Collector, "SCANNER_OP_TIMEOUT_S", 0.05)
+    stopped = []
+
+    class HangingScanner(FakeScanner):
+        async def start(self):
+            await asyncio.sleep(10)
+
+        async def stop(self):
+            stopped.append(self)
+
+    c = Collector(Settings(backfill_on_start=False), store, HangingScanner)
+    assert asyncio.run(c._start_scanner()) is False
+    assert c._scanner is None
+    assert stopped == [HangingScanner.instances[-1]]
