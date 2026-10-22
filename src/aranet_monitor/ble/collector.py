@@ -27,13 +27,14 @@ import shutil
 import signal
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from bleak import BleakScanner
 from bleak.backends.device import BLEDevice
 
+from aranet_monitor.ble.adapter import bleak_kwargs, can_power_cycle, power_cycle_adapter
 from aranet_monitor.ble.history import fetch_history
 from aranet_monitor.ble.parse import MANUFACTURER_ID, parse_advert
 from aranet_monitor.config import Settings
@@ -101,6 +102,9 @@ class Collector:
     BACKFILL_RETRY_S = 900  # first retry after a failure; doubles each time ...
     BACKFILL_RETRY_MAX_S = 6 * 3600  # ... up to this
     SCANNER_OP_TIMEOUT_S = 20
+    SCANNER_RESTART_PAUSE_S = 2.0
+    WATCHDOG_POLL_S = 15.0
+    ADAPTER_RESET_AFTER = 1  # scanner restarts that heard nothing at all before power-cycling
     MAX_UNLISTED_DEVICES = 16  # without an allow-list, ignore adverts beyond this many devices
     CLOCK_POLL_S = 5.0  # how often to re-check the clock while waiting for NTP
     ERROR_LOG_EVERY_S = 60  # e.g. DB down: one traceback per minute, not one per advert
@@ -112,17 +116,24 @@ class Collector:
         scanner_factory: Callable[..., BleakScanner] = BleakScanner,
         history_fetcher=fetch_history,
         clock_probe: Callable[[], bool | None] = clock_synchronised,
+        adapter_reset: Callable[[str | None], Awaitable[object]] | None = None,
     ):
         self.settings = settings
         self.store = store
         self._scanner_factory = scanner_factory
         self._fetch_history = history_fetcher
         self._clock_probe = clock_probe
+        if adapter_reset is None and can_power_cycle():
+            adapter_reset = power_cycle_adapter
+        # None: a deaf adapter just gets scanner restarts (disabled, or not on Linux)
+        self._adapter_reset = adapter_reset if settings.adapter_reset else None
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
         self._devices: dict[str, _DeviceState] = {}
         self._scanner: BleakScanner | None = None
         self._ble_lock = asyncio.Lock()
-        self._last_advert = time.monotonic()
+        self._last_advert = time.monotonic()  # last advert from a (wanted) Aranet
+        self._last_radio = time.monotonic()  # last advert from any device at all
+        self._deaf_restarts = 0  # consecutive scanner restarts after which nothing was heard
         self._stop = asyncio.Event()
         self.stats = _Stats()
         self._tasks: set[asyncio.Task] = set()
@@ -132,6 +143,7 @@ class Collector:
 
     # ------------------------------------------------------------------ scanner
     def _on_advert(self, device: BLEDevice, ad) -> None:
+        self._last_radio = time.monotonic()
         raw = ad.manufacturer_data.get(MANUFACTURER_ID)
         if raw is None:
             return
@@ -148,7 +160,9 @@ class Collector:
 
     async def _start_scanner(self) -> bool:
         """Start a fresh scanner; on failure log it and leave recovery to the watchdog."""
-        scanner = self._scanner_factory(detection_callback=self._on_advert)
+        scanner = self._scanner_factory(
+            detection_callback=self._on_advert, **bleak_kwargs(self.settings.ble_adapter)
+        )
         try:
             await asyncio.wait_for(scanner.start(), self.SCANNER_OP_TIMEOUT_S)
         except Exception as exc:
@@ -305,6 +319,7 @@ class Collector:
                         since,
                         timeout=self.settings.ble_timeout_s,
                         on_chunk=save,
+                        adapter=self.settings.ble_adapter,
                     )
                     await asyncio.to_thread(
                         self.store.upsert_device, result.device, int(time.time()), None
@@ -369,21 +384,51 @@ class Collector:
 
     # ------------------------------------------------------------------ watchdog
     async def _watchdog(self) -> None:
+        """Restart the scanner when the sensor goes quiet; power-cycle a deaf adapter.
+
+        If other devices are still heard, the sensor is just out of range and a scanner
+        restart is all we can do. If nothing at all is heard, even after a restart, the
+        controller has stopped delivering adverts and only an adapter power-cycle helps.
+        """
         while not self._stop.is_set():
-            await asyncio.sleep(15)
+            await asyncio.sleep(self.WATCHDOG_POLL_S)
             if self._ble_lock.locked():
                 continue
-            silent = time.monotonic() - self._last_advert
-            if silent > self.settings.watchdog_s:
-                log.warning("no adverts for %.0fs; restarting scanner", silent)
-                await asyncio.to_thread(
-                    self.store.log_event, "scanner_restart", f"silent {silent:.0f}s"
-                )
-                async with self._ble_lock:
-                    await self._stop_scanner()
-                    await asyncio.sleep(2)
-                    await self._start_scanner()
-                self._last_advert = time.monotonic()
+            now = time.monotonic()
+            silent = now - self._last_advert
+            if silent <= self.settings.watchdog_s:
+                continue
+            deaf = now - self._last_radio > self.settings.watchdog_s
+            reset = (
+                deaf
+                and self._adapter_reset is not None
+                and self._deaf_restarts >= self.ADAPTER_RESET_AFTER
+            )
+            log.warning(
+                "no Aranet adverts for %.0fs (%s); %s",
+                silent,
+                "nothing heard from any device" if deaf else "other devices still heard",
+                "power-cycling the Bluetooth adapter" if reset else "restarting scanner",
+            )
+            await asyncio.to_thread(
+                self.store.log_event,
+                "adapter_reset" if reset else "scanner_restart",
+                f"silent {silent:.0f}s" + ("" if deaf else ", radio alive"),
+            )
+            async with self._ble_lock:
+                await self._stop_scanner()
+                if reset:
+                    try:
+                        await asyncio.wait_for(
+                            self._adapter_reset(self.settings.ble_adapter),
+                            self.SCANNER_OP_TIMEOUT_S,
+                        )
+                    except Exception as exc:
+                        log.error("adapter power-cycle failed: %r", exc)
+                await asyncio.sleep(self.SCANNER_RESTART_PAUSE_S)
+                await self._start_scanner()
+            self._deaf_restarts = self._deaf_restarts + 1 if deaf and not reset else 0
+            self._last_advert = self._last_radio = time.monotonic()
 
     # ------------------------------------------------------------------ lifecycle
     def stop(self) -> None:
@@ -433,6 +478,7 @@ class Collector:
             with contextlib.suppress(NotImplementedError, RuntimeError):
                 loop.add_signal_handler(sig, self.stop)
         await asyncio.to_thread(self.store.log_event, "start", "collector started")
+        log.info("Bluetooth adapter: %s", self.settings.ble_adapter or "system default")
         if not self.settings.devices:
             log.warning(
                 "ARANET_DEVICES is not set: accepting adverts from any Aranet device; new "

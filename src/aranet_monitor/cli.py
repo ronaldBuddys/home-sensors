@@ -93,9 +93,10 @@ def _parse_time(value: str | None, default: int) -> int:
 
 
 # ---------------------------------------------------------------------- commands
-async def _scan(seconds: float) -> None:
+async def _scan(seconds: float, adapter: str | None = None) -> None:
     from bleak import BleakScanner
 
+    from aranet_monitor.ble.adapter import bleak_kwargs
     from aranet_monitor.ble.parse import MANUFACTURER_ID, parse_advert
 
     seen: dict[str, object] = {}
@@ -107,7 +108,7 @@ async def _scan(seconds: float) -> None:
                 device.address, device.name or ad.local_name, bytes(raw), ad.rssi
             )
 
-    async with BleakScanner(detection_callback=cb):
+    async with BleakScanner(detection_callback=cb, **bleak_kwargs(adapter)):
         await asyncio.sleep(seconds)
     if not seen:
         print("No Aranet devices heard. Is the sensor in range and Bluetooth on?")
@@ -128,7 +129,7 @@ async def _scan(seconds: float) -> None:
 
 def cmd_scan(args, settings: Settings) -> int:
     """List nearby Aranet devices and their advertised readings."""
-    asyncio.run(_scan(args.seconds))
+    asyncio.run(_scan(args.seconds, settings.ble_adapter))
     return 0
 
 
@@ -181,6 +182,7 @@ def cmd_backfill(args, settings: Settings) -> int:
                 timeout=settings.ble_timeout_s,
                 max_records=args.last,
                 on_chunk=save,
+                adapter=settings.ble_adapter,
             )
         )
     except Exception as exc:
