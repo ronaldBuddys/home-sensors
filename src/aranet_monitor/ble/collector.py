@@ -167,6 +167,10 @@ class Collector:
             await asyncio.wait_for(scanner.start(), self.SCANNER_OP_TIMEOUT_S)
         except Exception as exc:
             log.error("scanner start failed: %r (watchdog will retry)", exc)
+            # A start that timed out may have left BlueZ discovering on our behalf; without a
+            # stop every later start fails with org.bluez.Error.InProgress.
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(scanner.stop(), self.SCANNER_OP_TIMEOUT_S)
             self._scanner = None
             return False
         self._scanner = scanner
