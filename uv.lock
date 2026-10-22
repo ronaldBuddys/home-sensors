@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.12' and sys_platform == 'emscripten'",
@@ -81,6 +81,7 @@ dependencies = [
     { name = "aranet4" },
     { name = "bleak" },
     { name = "dash" },
+    { name = "dbus-fast", marker = "sys_platform == 'linux'" },
     { name = "fastapi" },
     { name = "plotly" },
     { name = "psycopg", extra = ["binary"] },
@@ -106,6 +107,7 @@ requires-dist = [
     { name = "aranet4", specifier = ">=2.6.0" },
     { name = "bleak", specifier = ">=1.0" },
     { name = "dash", specifier = ">=3.0" },
+    { name = "dbus-fast", marker = "sys_platform == 'linux'", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "plotly", specifier = ">=6.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },

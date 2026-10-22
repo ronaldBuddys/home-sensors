@@ -18,8 +18,9 @@ ADDR = "AA:BB:CC:00:11:22"
 class FakeScanner:
     instances = []
 
-    def __init__(self, detection_callback):
+    def __init__(self, detection_callback, **kwargs):
         self.cb = detection_callback
+        self.kwargs = kwargs
         self.running = False
         FakeScanner.instances.append(self)
 
@@ -33,6 +34,10 @@ class FakeScanner:
         dev = SimpleNamespace(address=address, name=name)
         ad = SimpleNamespace(manufacturer_data={0x0702: raw}, rssi=rssi, local_name=name)
         self.cb(dev, ad)
+
+    def emit_other(self, address="11:22:33:44:55:66"):
+        dev = SimpleNamespace(address=address, name=None)
+        self.cb(dev, SimpleNamespace(manufacturer_data={}, rssi=-60, local_name=None))
 
 
 def with_counter(counter, ago=5, co2=831):
@@ -429,3 +434,74 @@ def test_clock_synchronised_marker(monkeypatch):
 
     monkeypatch.setattr(mod.subprocess, "run", boom)
     assert mod.clock_synchronised() is None
+
+
+def _watchdog_collector(store, monkeypatch, watchdog_s, **settings_kw):
+    FakeScanner.instances.clear()
+    monkeypatch.setattr(Collector, "WATCHDOG_POLL_S", 0.02)
+    monkeypatch.setattr(Collector, "SCANNER_RESTART_PAUSE_S", 0.0)
+    resets = []
+
+    async def reset(adapter):
+        resets.append(adapter)
+
+    settings = Settings(backfill_on_start=False, watchdog_s=watchdog_s, **settings_kw)
+    return Collector(settings, store, FakeScanner, adapter_reset=reset), resets
+
+
+def _events(engine, kind):
+    with engine.connect() as c:
+        return c.execute(
+            select(func.count()).select_from(events).where(events.c.kind == kind)
+        ).scalar()
+
+
+def test_deaf_radio_gets_adapter_power_cycled(store, engine, monkeypatch):
+    c, resets = _watchdog_collector(store, monkeypatch, watchdog_s=0.1)
+
+    async def until_reset(_s):
+        await wait_until(lambda: resets, "adapter power-cycle")
+
+    asyncio.run(drive(c, [until_reset], settle=0.0))
+    # one plain restart first, then the power-cycle, then a fresh scanner
+    assert _events(engine, "scanner_restart") >= 1
+    assert _events(engine, "adapter_reset") >= 1
+    assert len(FakeScanner.instances) >= 3
+    assert resets[0] is None  # no adapter configured: power-cycle the default one
+
+
+def test_configured_adapter_is_used_for_scanning_and_reset(store, engine, monkeypatch):
+    c, resets = _watchdog_collector(store, monkeypatch, watchdog_s=0.1, ble_adapter="hci1")
+
+    async def until_reset(_s):
+        await wait_until(lambda: resets, "adapter power-cycle")
+
+    asyncio.run(drive(c, [until_reset], settle=0.0))
+    assert resets[0] == "hci1"
+    assert all(s.kwargs == {"bluez": {"adapter": "hci1"}} for s in FakeScanner.instances)
+
+
+def test_adapter_reset_can_be_disabled(store, engine, monkeypatch):
+    c, resets = _watchdog_collector(store, monkeypatch, watchdog_s=0.05, adapter_reset=False)
+
+    async def wait_a_while(_s):
+        await asyncio.sleep(0.6)
+
+    asyncio.run(drive(c, [wait_a_while], settle=0.0))
+    assert _events(engine, "scanner_restart") >= 2
+    assert _events(engine, "adapter_reset") == 0
+    assert not resets
+
+
+def test_sensor_out_of_range_only_restarts_scanner(store, engine, monkeypatch):
+    c, resets = _watchdog_collector(store, monkeypatch, watchdog_s=0.15)
+
+    async def other_devices_keep_talking(_s):
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            FakeScanner.instances[-1].emit_other()
+            await asyncio.sleep(0.02)
+
+    asyncio.run(drive(c, [other_devices_keep_talking], settle=0.0))
+    assert _events(engine, "scanner_restart") >= 2
+    assert not resets

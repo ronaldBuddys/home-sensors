@@ -20,6 +20,7 @@ from bleak import BleakClient
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
 
+from aranet_monitor.ble.adapter import bleak_kwargs
 from aranet_monitor.models import DeviceInfo, Reading
 
 log = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ async def fetch_history(
     max_records: int | None = None,
     on_chunk: Callable[[DeviceInfo, list[Reading]], Awaitable[None] | None] | None = None,
     chunk_size: int = CHUNK_RECORDS,
+    adapter: str | None = None,
 ) -> HistoryResult:
     """Connect to a device and download records logged after ``since_ts``.
 
@@ -106,10 +108,12 @@ async def fetch_history(
         Callback (sync or async) receiving each chunk's readings.
     chunk_size
         Records per request.
+    adapter
+        Local BlueZ adapter to connect through (``hci1``, ...); ``None`` = default.
     """
     address = target if isinstance(target, str) else target.address
     monitor = Aranet4(address=address)
-    monitor.device = BleakClient(target, timeout=timeout)
+    monitor.device = BleakClient(target, timeout=timeout, **bleak_kwargs(adapter))
 
     async def step(coro, mult: float = 1.0):
         return await asyncio.wait_for(coro, timeout * mult)

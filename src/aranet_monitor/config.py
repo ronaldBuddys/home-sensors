@@ -78,6 +78,8 @@ class Settings:
     backfill_on_start: bool = True
     gap_backfill_min_s: int = 150  # also always >= 1.5 x the device's logging interval
     watchdog_s: int = 180
+    ble_adapter: str | None = None  # BlueZ adapter name, e.g. "hci1"; None = system default
+    adapter_reset: bool = True  # power-cycle the adapter when it stops hearing anything
     ble_timeout_s: float = 30.0
     wait_clock_sync_s: int = 0  # collector waits up to this long for NTP sync (0 = don't wait)
     co2_warn: int = 1000
@@ -119,6 +121,8 @@ class Settings:
             not in ("0", "false", "no"),
             gap_backfill_min_s=int(env.get("ARANET_GAP_BACKFILL_MIN_S", cls.gap_backfill_min_s)),
             watchdog_s=int(env.get("ARANET_WATCHDOG_S", cls.watchdog_s)),
+            ble_adapter=env.get("ARANET_BLE_ADAPTER") or None,
+            adapter_reset=env.get("ARANET_ADAPTER_RESET", "1").lower() not in ("0", "false", "no"),
             ble_timeout_s=float(env.get("ARANET_BLE_TIMEOUT_S", cls.ble_timeout_s)),
             wait_clock_sync_s=int(env.get("ARANET_WAIT_CLOCK_SYNC_S", cls.wait_clock_sync_s)),
             co2_warn=int(env.get("ARANET_CO2_WARN", cls.co2_warn)),

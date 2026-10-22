@@ -24,6 +24,7 @@ classifiers = [
 dependencies = [
     "aranet4>=2.6.0",
     "bleak>=1.0",
+    "dbus-fast>=2.0; sys_platform == 'linux'",  # imported directly for the adapter power-cycle
     "sqlalchemy>=2.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
