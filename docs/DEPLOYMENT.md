@@ -38,6 +38,9 @@ Every dependency has an ARM64 wheel, so nothing heavy compiles on the Pi. A **32
 sudo apt update && sudo apt full-upgrade -y
 sudo apt install -y git bluez
 sudo usermod -aG bluetooth "$USER"  # BlueZ access for headless logins; log out and in again
+# Passive BLE scanning needs BlueZ's (still "experimental") advertisement monitor API:
+sudo sed -i 's/^#\?Experimental = .*/Experimental = true/' /etc/bluetooth/main.conf
+sudo systemctl restart bluetooth
 curl -LsSf https://astral.sh/uv/install.sh | sh && exec "$SHELL" -l
 ```
 
@@ -246,6 +249,7 @@ uv run --no-dev aranet status
 ## 10. Troubleshooting
 
 - **Distance.** Keep the Pi within a few metres of the sensor. At about −85 dBm adverts still arrive, but history downloads become unreliable; they retry and resume, but slowly.
+- **Scan mode.** The collector logs `scan mode: passive` at start-up. If it says `active` instead, BlueZ's experimental features are off (see the install step). Active scanning makes the controller send a scan request to every device it hears, and BlueZ stops and restarts the scan every ~10 s. A Raspberry Pi's onboard chip (Pi 3B+/4, BCM43455) wedges under that within hours: `LE Set Scan Enable` times out (`hci0: Opcode 0x200c failed: -110` in `dmesg`, though not always logged) and every later scan start fails with `TimeoutError` or `org.bluez.Error.InProgress`. A D-Bus power-cycle doesn't revive it; rebinding the driver does (`echo serial0-0 | sudo tee /sys/bus/serial/drivers/hci_uart_bcm/unbind`, then the same with `bind`). `ARANET_SCAN_MODE=active|passive` overrides the automatic choice.
 - **Radio.** If the onboard Bluetooth is flaky, typically because Wi-Fi shares the chip on a Pi 3, use Ethernet or a USB BLE dongle.
 - **Power.** Use a proper 2.5 A (Pi 3) or 3 A (Pi 4/5) supply. Under-voltage causes Bluetooth dropouts.
 - **No readings in the adverts.** Smart Home integrations are off; see [section 3](#3-set-up-the-sensor).

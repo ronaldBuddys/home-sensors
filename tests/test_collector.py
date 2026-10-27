@@ -523,3 +523,43 @@ def test_failed_scanner_start_is_cleaned_up(store, engine, monkeypatch):
     assert asyncio.run(c._start_scanner()) is False
     assert c._scanner is None
     assert stopped == [HangingScanner.instances[-1]]
+
+
+def _scan_mode_collector(store, scan_mode="auto", supported=True, **settings_kw):
+    FakeScanner.instances.clear()
+    probed = []
+
+    async def probe(adapter):
+        probed.append(adapter)
+        return supported
+
+    settings = Settings(backfill_on_start=False, scan_mode=scan_mode, **settings_kw)
+    return Collector(settings, store, FakeScanner, passive_probe=probe), probed
+
+
+def test_auto_scan_mode_scans_passively_where_supported(store, engine):
+    c, probed = _scan_mode_collector(store, ble_adapter="hci1")
+    asyncio.run(drive(c, [lambda s: s.emit()]))
+    assert probed == ["hci1"]
+    kwargs = FakeScanner.instances[-1].kwargs
+    assert kwargs["scanning_mode"] == "passive"
+    assert kwargs["bluez"]["adapter"] == "hci1"
+    patterns = kwargs["bluez"]["or_patterns"]
+    assert (0, 0xFF, b"\x02\x07") in patterns  # Aranet (SAF Tehnika, 0x0702) manufacturer data
+    assert n_rows(engine) == 1
+
+
+def test_auto_scan_mode_falls_back_to_active(store, engine, caplog):
+    c, _ = _scan_mode_collector(store, supported=False)
+    asyncio.run(drive(c, [lambda s: s.emit()]))
+    assert FakeScanner.instances[-1].kwargs == {}
+    assert "Experimental = true" in caplog.text
+    assert n_rows(engine) == 1
+
+
+@pytest.mark.parametrize("mode", ["active", "passive"])
+def test_explicit_scan_mode_skips_the_probe(store, engine, mode):
+    c, probed = _scan_mode_collector(store, scan_mode=mode, supported=mode == "active")
+    asyncio.run(drive(c, []))
+    assert not probed
+    assert ("scanning_mode" in FakeScanner.instances[-1].kwargs) == (mode == "passive")

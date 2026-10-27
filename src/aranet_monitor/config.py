@@ -25,6 +25,13 @@ def _split(value: str | None) -> tuple[str, ...]:
     return tuple(v.strip().upper() for v in value.split(",") if v.strip())
 
 
+def _scan_mode(value: str | None) -> str:
+    mode = (value or "auto").strip().lower()
+    if mode not in ("auto", "passive", "active"):
+        raise ValueError(f"ARANET_SCAN_MODE must be auto, passive or active, got {value!r}")
+    return mode
+
+
 def _postgres_url_from_parts() -> str | None:
     host = os.environ.get("POSTGRES_HOST")
     if not host:
@@ -80,6 +87,7 @@ class Settings:
     watchdog_s: int = 180
     ble_adapter: str | None = None  # BlueZ adapter name, e.g. "hci1"; None = system default
     adapter_reset: bool = True  # power-cycle the adapter when it stops hearing anything
+    scan_mode: str = "auto"  # "passive", "active", or "auto" = passive where BlueZ supports it
     ble_timeout_s: float = 30.0
     wait_clock_sync_s: int = 0  # collector waits up to this long for NTP sync (0 = don't wait)
     co2_warn: int = 1000
@@ -123,6 +131,7 @@ class Settings:
             watchdog_s=int(env.get("ARANET_WATCHDOG_S", cls.watchdog_s)),
             ble_adapter=env.get("ARANET_BLE_ADAPTER") or None,
             adapter_reset=env.get("ARANET_ADAPTER_RESET", "1").lower() not in ("0", "false", "no"),
+            scan_mode=_scan_mode(env.get("ARANET_SCAN_MODE")),
             ble_timeout_s=float(env.get("ARANET_BLE_TIMEOUT_S", cls.ble_timeout_s)),
             wait_clock_sync_s=int(env.get("ARANET_WAIT_CLOCK_SYNC_S", cls.wait_clock_sync_s)),
             co2_warn=int(env.get("ARANET_CO2_WARN", cls.co2_warn)),
