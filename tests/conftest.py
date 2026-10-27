@@ -32,6 +32,17 @@ def _isolate_from_local_env(monkeypatch):
             monkeypatch.delenv(key, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_bluez(monkeypatch):
+    """The collector's default scan-mode probe asks the host's BlueZ; keep tests hermetic."""
+    import aranet_monitor.ble.collector as collector
+
+    async def no_passive(_adapter):
+        return False
+
+    monkeypatch.setattr(collector, "passive_scan_supported", no_passive)
+
+
 PG_URL = os.environ.get("ARANET_TEST_PG_URL")  # e.g. postgresql+psycopg://u:p@localhost:55432/t
 
 

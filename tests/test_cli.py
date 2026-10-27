@@ -181,6 +181,19 @@ def test_settings_wait_clock_sync_from_env(monkeypatch):
     assert Settings.from_env().wait_clock_sync_s == 120
 
 
+def test_settings_scan_mode_from_env(monkeypatch):
+    import pytest
+
+    from aranet_monitor.config import Settings
+
+    assert Settings.from_env().scan_mode == "auto"
+    monkeypatch.setenv("ARANET_SCAN_MODE", " Active ")
+    assert Settings.from_env().scan_mode == "active"
+    monkeypatch.setenv("ARANET_SCAN_MODE", "loud")
+    with pytest.raises(ValueError, match="ARANET_SCAN_MODE"):
+        Settings.from_env()
+
+
 def _ts(store, dev):
     from sqlalchemy import select
 

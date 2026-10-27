@@ -1,11 +1,11 @@
 """Continuous, battery-friendly collector.
 
-Normal operation only listens to BLE advertisements (bleak's default BlueZ scan; we never
-connect): with "Smart Home integrations" enabled the sensor broadcasts its latest measurement
-in every advertisement. A GATT connection (which costs sensor battery) is only made to backfill
-history, and only for *trusted* devices -- allow-listed ones (``ARANET_DEVICES``) or, without an
-allow-list, devices that already had stored readings before this session (so a spoofed advert
-can't make the collector pause scanning to connect to it):
+Normal operation only listens to BLE advertisements (we never connect): with "Smart Home
+integrations" enabled the sensor broadcasts its latest measurement in every advertisement. A
+GATT connection (which costs sensor battery) is only made to backfill history, and only for
+*trusted* devices -- allow-listed ones (``ARANET_DEVICES``) or, without an allow-list, devices
+that already had stored readings before this session (so a spoofed advert can't make the
+collector pause scanning to connect to it):
 
 * when the measurement time of a new advert is more than ``max(gap_backfill_min_s,
   1.5 x interval)`` after the newest stored row (collector was down, scanner was paused,
@@ -16,6 +16,12 @@ can't make the collector pause scanning to connect to it):
 A re-advertised measurement is recognised purely by its timestamp (within interval/2 of the
 newest stored row), not by the advert's rolling counter byte, so firmware that doesn't
 increment it cannot cause silent data loss.
+
+Scanning is *passive* where BlueZ supports it (``ARANET_SCAN_MODE=auto``, the default): the
+kernel runs one continuous low-duty-cycle passive scan and BlueZ hands us matching adverts via
+an advertisement monitor. The fallback, BlueZ discovery, is an *active* scan (a scan request to
+every device heard) that BlueZ stops and restarts every ~10 s; on the Raspberry Pi's onboard
+UART chip that load is what eventually wedges the controller (``LE Set Scan Enable`` times out).
 """
 
 from __future__ import annotations
@@ -32,15 +38,31 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from bleak import BleakScanner
+from bleak.args.bluez import OrPattern
+from bleak.assigned_numbers import AdvertisementDataType
 from bleak.backends.device import BLEDevice
 
-from aranet_monitor.ble.adapter import bleak_kwargs, can_power_cycle, power_cycle_adapter
+from aranet_monitor.ble.adapter import (
+    bleak_kwargs,
+    can_power_cycle,
+    passive_scan_supported,
+    power_cycle_adapter,
+)
 from aranet_monitor.ble.history import fetch_history
 from aranet_monitor.ble.parse import MANUFACTURER_ID, parse_advert
 from aranet_monitor.config import Settings
 from aranet_monitor.db.store import Store
 
 log = logging.getLogger(__name__)
+
+# Passive scanning only delivers adverts matching one of these: Aranet's manufacturer data, plus
+# the common AD Flags values, so the watchdog can still tell "sensor gone" from "radio deaf".
+PASSIVE_PATTERNS = [
+    OrPattern(
+        0, AdvertisementDataType.MANUFACTURER_SPECIFIC_DATA, MANUFACTURER_ID.to_bytes(2, "little")
+    ),
+    *(OrPattern(0, AdvertisementDataType.FLAGS, bytes([f])) for f in (0x02, 0x06, 0x18, 0x1A)),
+]
 
 
 @dataclass
@@ -117,6 +139,7 @@ class Collector:
         history_fetcher=fetch_history,
         clock_probe: Callable[[], bool | None] = clock_synchronised,
         adapter_reset: Callable[[str | None], Awaitable[object]] | None = None,
+        passive_probe: Callable[[str | None], Awaitable[bool]] | None = None,
     ):
         self.settings = settings
         self.store = store
@@ -127,6 +150,10 @@ class Collector:
             adapter_reset = power_cycle_adapter
         # None: a deaf adapter just gets scanner restarts (disabled, or not on Linux)
         self._adapter_reset = adapter_reset if settings.adapter_reset else None
+        if passive_probe is None:
+            passive_probe = passive_scan_supported if can_power_cycle() else _no_passive
+        self._passive_probe = passive_probe
+        self._passive = False  # decided in run()
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
         self._devices: dict[str, _DeviceState] = {}
         self._scanner: BleakScanner | None = None
@@ -160,9 +187,13 @@ class Collector:
 
     async def _start_scanner(self) -> bool:
         """Start a fresh scanner; on failure log it and leave recovery to the watchdog."""
-        scanner = self._scanner_factory(
-            detection_callback=self._on_advert, **bleak_kwargs(self.settings.ble_adapter)
-        )
+        kwargs = bleak_kwargs(self.settings.ble_adapter)
+        if self._passive:
+            kwargs = {
+                "scanning_mode": "passive",
+                "bluez": {**kwargs.get("bluez", {}), "or_patterns": PASSIVE_PATTERNS},
+            }
+        scanner = self._scanner_factory(detection_callback=self._on_advert, **kwargs)
         try:
             await asyncio.wait_for(scanner.start(), self.SCANNER_OP_TIMEOUT_S)
         except Exception as exc:
@@ -174,7 +205,7 @@ class Collector:
             self._scanner = None
             return False
         self._scanner = scanner
-        log.info("BLE scan started (listen-only)")
+        log.info("BLE scan started (%s)", "passive" if self._passive else "active")
         return True
 
     async def _stop_scanner(self) -> None:
@@ -474,6 +505,20 @@ class Collector:
                 )
                 return
 
+    async def _choose_scan_mode(self) -> None:
+        mode = self.settings.scan_mode
+        if mode == "auto":
+            self._passive = await self._passive_probe(self.settings.ble_adapter)
+            if not self._passive:
+                log.warning(
+                    "passive BLE scanning unavailable (BlueZ needs `Experimental = true` in "
+                    "/etc/bluetooth/main.conf); falling back to active scanning, which some "
+                    "adapters (e.g. the Raspberry Pi's onboard chip) don't survive for long"
+                )
+        else:
+            self._passive = mode == "passive"
+        log.info("scan mode: %s", "passive" if self._passive else "active")
+
     async def run(self) -> None:
         """Run until :meth:`stop` is called or SIGINT/SIGTERM is received."""
         loop = asyncio.get_running_loop()
@@ -483,6 +528,7 @@ class Collector:
                 loop.add_signal_handler(sig, self.stop)
         await asyncio.to_thread(self.store.log_event, "start", "collector started")
         log.info("Bluetooth adapter: %s", self.settings.ble_adapter or "system default")
+        await self._choose_scan_mode()
         if not self.settings.devices:
             log.warning(
                 "ARANET_DEVICES is not set: accepting adverts from any Aranet device; new "
@@ -513,6 +559,10 @@ class Collector:
                 f"backfilled={self.stats.backfilled}",
             )
             log.info("collector stopped")
+
+
+async def _no_passive(_adapter: str | None) -> bool:
+    return False
 
 
 def _quiet_dbus_noise(loop: asyncio.AbstractEventLoop, context: dict) -> None:
